@@ -9,12 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class APGroupsResource:
-    """Resource for managing AP groups.
-
-    Note: AP group endpoints are not explicitly shown in the Postman collection.
-    This implementation is based on assumptions and may need adjustment based on
-    actual API behavior. Paths use /venues/{venueId}/apGroups pattern.
-    """
+    """Resource for managing AP groups."""
 
     _required_fields_create = ["name"]
 
