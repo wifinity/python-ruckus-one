@@ -230,6 +230,11 @@ class WiFiNetworksResource(BaseResource):
                 "wlan.ssid is required (provide either ssid parameter or wlan dict with ssid)"
             )
 
+        # API expects type discriminator inside wlan for polymorphic deserialization
+        network_type = kwargs.get("type")
+        if network_type:
+            wlan["type"] = network_type
+
         # Update kwargs with wlan object
         kwargs["wlan"] = wlan
 
