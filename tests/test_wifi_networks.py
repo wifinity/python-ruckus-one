@@ -126,7 +126,11 @@ def test_wifi_networks_create(mock_client):
     assert network["name"] == "Test Network"
     mock_client.post.assert_called_once_with(
         "/networks",
-        json={"name": "Test Network", "type": "psk", "wlan": {"ssid": "TestSSID"}},
+        json={
+            "name": "Test Network",
+            "type": "psk",
+            "wlan": {"ssid": "TestSSID", "type": "psk"},
+        },
     )
 
 
@@ -147,7 +151,11 @@ def test_wifi_networks_create_with_wlan_dict(mock_client):
     assert network["name"] == "Test Network"
     mock_client.post.assert_called_once_with(
         "/networks",
-        json={"name": "Test Network", "type": "psk", "wlan": {"ssid": "TestSSID"}},
+        json={
+            "name": "Test Network",
+            "type": "psk",
+            "wlan": {"ssid": "TestSSID", "type": "psk"},
+        },
     )
 
 

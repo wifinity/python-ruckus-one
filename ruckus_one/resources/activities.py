@@ -2,7 +2,7 @@
 
 import logging
 import time
-from typing import Any, Dict, cast
+from typing import Any, Dict, Optional, Tuple, cast
 
 from ruckus_one.exceptions import RuckusOneAsyncOperationError, RuckusOneNotFoundError
 
@@ -43,6 +43,37 @@ class ActivitiesResource:
             )
         return cast(Dict[str, Any], response)
 
+    def _check_timeout(self, elapsed: float, timeout: float, request_id: str) -> None:
+        """Raise if elapsed time exceeds timeout."""
+        if elapsed > timeout:
+            raise RuckusOneAsyncOperationError(
+                f"Operation timed out after {timeout} seconds",
+                request_id=request_id,
+            )
+
+    def _process_activity_status(
+        self, activity: Dict[str, Any], request_id: str
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        """Process activity status. Returns (done, result)."""
+        status = activity.get("status", "").upper()
+
+        if status == "SUCCESS":
+            return True, activity
+
+        if status in ("FAIL", "FAILED", "ERROR", "CANCELLED"):
+            error_msg = activity.get("error") or activity.get("message")
+            if not error_msg:
+                error_msg = f"Operation {status.lower()}"
+            elif not isinstance(error_msg, str):
+                error_msg = str(error_msg)
+            raise RuckusOneAsyncOperationError(
+                f"Operation failed: {error_msg}",
+                request_id=request_id,
+                response_data=activity,
+            )
+
+        return False, None
+
     def wait_for_completion(
         self,
         request_id: str,
@@ -66,34 +97,20 @@ class ActivitiesResource:
 
         while True:
             elapsed = time.time() - start_time
-            if elapsed > timeout:
-                raise RuckusOneAsyncOperationError(
-                    f"Operation timed out after {timeout} seconds",
-                    request_id=request_id,
-                )
+            self._check_timeout(elapsed, timeout, request_id)
 
             try:
                 activity = self.get(request_id)
-                status = activity.get("status", "").upper()
-
                 logger.debug(
-                    f"Activity {request_id} status: {status} "
+                    f"Activity {request_id} status: {activity.get('status', '')} "
                     f"(elapsed: {elapsed:.1f}s)"
                 )
 
-                if status == "SUCCESS":
+                done, result = self._process_activity_status(activity, request_id)
+                if done:
                     logger.info(f"Activity {request_id} completed successfully")
-                    return activity
+                    return cast(Dict[str, Any], result)
 
-                if status in ("FAILED", "ERROR", "CANCELLED"):
-                    error_msg = activity.get("message", f"Operation {status.lower()}")
-                    raise RuckusOneAsyncOperationError(
-                        f"Operation failed: {error_msg}",
-                        request_id=request_id,
-                        response_data=activity,
-                    )
-
-                # Still in progress, wait and poll again
                 time.sleep(poll_interval)
 
             except RuckusOneNotFoundError:
