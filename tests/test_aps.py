@@ -25,6 +25,7 @@ def test_aps_get_by_serial(mock_client):
     ap = resource.get_by_serial("venue_1", "ABC123")
 
     assert ap["serialNumber"] == "ABC123"
+    mock_client.get.assert_called_once_with("/venues/aps/ABC123")
 
 
 def test_aps_get_by_serial_not_found(mock_client):

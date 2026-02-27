@@ -31,12 +31,12 @@ class APsResource:
     def get_by_serial(
         self, venue_id: Union[int, str], serial_number: str
     ) -> Dict[str, Any]:
-        """Get AP by serial number.
+        """Get AP by serial number using direct lookup.
 
-        Note: This method may need to filter from list if API doesn't support direct lookup.
+        This uses the /venues/aps/{serialNumber} endpoint exposed by the API.
 
         Args:
-            venue_id: Venue ID (for filtering)
+            venue_id: Venue ID (retained for backwards compatibility; not used)
             serial_number: AP serial number
 
         Returns:
@@ -45,22 +45,11 @@ class APsResource:
         Raises:
             RuckusOneNotFoundError: If AP not found
         """
-        # Try direct GET first, fall back to filtering list
         path = f"{self._get_path()}/{serial_number}"
-        try:
-            response = self.client.get(path)
-            if response:
-                return cast(Dict[str, Any], response)
-        except RuckusOneNotFoundError:
-            pass
-
-        # Fall back to filtering list by serial number
-        aps = self.list(venue_id=venue_id, serialNumber=serial_number)
-        if not aps:
+        response = self.client.get(path)
+        if not response:
             raise RuckusOneNotFoundError(f"AP with serial {serial_number} not found")
-        if len(aps) > 1:
-            raise ValueError(f"Multiple APs found with serial {serial_number}")
-        return cast(Dict[str, Any], aps[0])
+        return cast(Dict[str, Any], response)
 
     def list(
         self, venue_id: Optional[Union[int, str]] = None, **filters: Any
