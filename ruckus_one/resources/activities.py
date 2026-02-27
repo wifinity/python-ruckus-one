@@ -1,5 +1,6 @@
 """Activities resource for async operation polling."""
 
+import json
 import logging
 import time
 from typing import Any, Dict, Optional, Tuple, cast
@@ -7,6 +8,65 @@ from typing import Any, Dict, Optional, Tuple, cast
 from ruckus_one.exceptions import RuckusOneAsyncOperationError, RuckusOneNotFoundError
 
 logger = logging.getLogger(__name__)
+
+
+def _format_error_dict(err: Dict[str, Any]) -> str:
+    """Format a single error dict (code, message, reason) into a display string."""
+    code = err.get("code")
+    msg = err.get("message") or err.get("reason") or ""
+    if msg and code:
+        return f"{msg} ({code})"
+    if msg:
+        return str(msg)
+    if code:
+        return str(code)
+    return ""
+
+
+def _parse_single_error(err: Any) -> str:
+    """Parse one entry from the errors list (dict or JSON string) into a display string."""
+    if isinstance(err, dict):
+        return _format_error_dict(err)
+    if isinstance(err, str):
+        try:
+            parsed = json.loads(err)
+            if isinstance(parsed, dict):
+                return _format_error_dict(parsed) or err
+            return err
+        except (json.JSONDecodeError, TypeError):
+            return err
+    return str(err)
+
+
+def _parse_activity_error(activity: Dict[str, Any]) -> str:
+    """Parse activity error payload into a human-readable message.
+
+    The Ruckus API returns activity['error'] as a JSON string, e.g.:
+    {"requestId":"...","errors":["{\"code\":\"WIFI-10126\",\"message\":\"Insufficient licenses\"}"]}
+    where each element of errors may be a string that is itself JSON with code and message.
+
+    Returns:
+        Human-readable error string, e.g. "Insufficient licenses (WIFI-10126)".
+        Falls back to the raw error string if parsing fails.
+    """
+    raw = activity.get("error") or activity.get("message")
+    if not raw:
+        return "Operation failed"
+    if not isinstance(raw, str):
+        return str(raw)
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return raw
+        errors = data.get("errors") or []
+        if not errors:
+            return raw
+        parts = [p for p in (_parse_single_error(e) for e in errors) if p]
+        if parts:
+            return "; ".join(parts)
+    except (json.JSONDecodeError, TypeError, KeyError):
+        pass
+    return raw
 
 
 class ActivitiesResource:
@@ -61,11 +121,9 @@ class ActivitiesResource:
             return True, activity
 
         if status in ("FAIL", "FAILED", "ERROR", "CANCELLED"):
-            error_msg = activity.get("error") or activity.get("message")
-            if not error_msg:
+            error_msg = _parse_activity_error(activity)
+            if error_msg == "Operation failed":
                 error_msg = f"Operation {status.lower()}"
-            elif not isinstance(error_msg, str):
-                error_msg = str(error_msg)
             raise RuckusOneAsyncOperationError(
                 f"Operation failed: {error_msg}",
                 request_id=request_id,
