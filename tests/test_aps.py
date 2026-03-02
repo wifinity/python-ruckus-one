@@ -303,3 +303,66 @@ def test_aps_get_lldp_neighbors_with_neighbors_field(mock_client):
 
     assert len(neighbors) == 1
     assert neighbors[0]["deviceName"] == "Switch1"
+
+
+def test_aps_get_network_settings(mock_client):
+    """Test getting AP network settings."""
+    mock_client.get.return_value = {
+        "ipType": "STATIC",
+        "ip": "192.168.1.10",
+        "netmask": "255.255.255.0",
+        "gateway": "192.168.1.1",
+        "primaryDnsServer": "8.8.8.8",
+        "secondaryDnsServer": "8.8.4.4",
+    }
+
+    resource = APsResource(mock_client)
+    settings = resource.get_network_settings("venue_1", "ABC123")
+
+    assert settings["ipType"] == "STATIC"
+    assert settings["ip"] == "192.168.1.10"
+    mock_client.get.assert_called_once_with(
+        "/venues/venue_1/aps/ABC123/networkSettings"
+    )
+
+
+def test_aps_get_network_settings_empty_response(mock_client):
+    """Test getting AP network settings when API returns no response."""
+    mock_client.get.return_value = None
+
+    resource = APsResource(mock_client)
+    settings = resource.get_network_settings("venue_1", "ABC123")
+
+    assert settings == {}
+
+
+def test_aps_update_network_settings(mock_client):
+    """Test updating AP network settings."""
+    settings = {
+        "ipType": "STATIC",
+        "ip": "192.168.1.10",
+        "netmask": "255.255.255.0",
+        "gateway": "192.168.1.1",
+        "primaryDnsServer": "8.8.8.8",
+        "secondaryDnsServer": "8.8.4.4",
+    }
+    mock_client.put.return_value = settings
+
+    resource = APsResource(mock_client)
+    result = resource.update_network_settings("venue_1", "ABC123", settings)
+
+    assert result == settings
+    mock_client.put.assert_called_once_with(
+        "/venues/venue_1/aps/ABC123/networkSettings", json=settings
+    )
+
+
+def test_aps_update_network_settings_failure(mock_client):
+    """Test updating AP network settings when API returns no response."""
+    mock_client.put.return_value = None
+
+    resource = APsResource(mock_client)
+    with pytest.raises(ValueError, match="Failed to update network settings"):
+        resource.update_network_settings(
+            "venue_1", "ABC123", {"ipType": "STATIC", "ip": "192.168.1.10"}
+        )

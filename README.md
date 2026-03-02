@@ -213,6 +213,33 @@ neighbors = client.aps.get_lldp_neighbors(
 # If no neighbor data is available, get_lldp_neighbors() returns an empty list
 ```
 
+**AP Network Settings**
+
+Get or update an AP's network settings (IP type, address, netmask, gateway, DNS). The API validates IP and netmask formats.
+
+```python
+# Get current network settings
+settings = client.aps.get_network_settings(
+    venue_id="venue_123",
+    serial_number="ABC123"
+)
+# Returns dict with ipType, ip, netmask, gateway, primaryDnsServer, secondaryDnsServer
+
+# Update network settings (e.g. set static IP)
+client.aps.update_network_settings(
+    venue_id="venue_123",
+    serial_number="ABC123",
+    settings={
+        "ipType": "STATIC",
+        "ip": "192.168.1.10",
+        "netmask": "255.255.255.0",
+        "gateway": "192.168.1.1",
+        "primaryDnsServer": "8.8.8.8",
+        "secondaryDnsServer": "8.8.4.4",
+    }
+)
+```
+
 #### Wi-Fi Networks
 
 ```python
@@ -582,6 +609,17 @@ neighbors = client.aps.get_lldp_neighbors(
 )
 for neighbor in neighbors:
     print(f"Neighbor: {neighbor.get('deviceName')} on {neighbor.get('interface')}")
+
+# Get or update AP network settings
+settings = client.aps.get_network_settings(
+    venue_id=venue["id"],
+    serial_number="ABC123"
+)
+client.aps.update_network_settings(
+    venue_id=venue["id"],
+    serial_number="ABC123",
+    settings={"ipType": "STATIC", "ip": "192.168.1.10", "netmask": "255.255.255.0", "gateway": "192.168.1.1"}
+)
 ```
 
 ### Working with Wi-Fi Networks

@@ -329,3 +329,58 @@ class APsResource:
         except RuckusOneAPIError as e:
             # Handle "No detected neighbor data" error gracefully
             return self._handle_lldp_neighbor_error(e, venue_id, serial_number)
+
+    def get_network_settings(
+        self, venue_id: Union[int, str], serial_number: str
+    ) -> Dict[str, Any]:
+        """Get network settings for an AP.
+
+        Args:
+            venue_id: Venue ID.
+            serial_number: AP serial number.
+
+        Returns:
+            Network settings for the AP (ipType, ip, netmask, gateway,
+            primaryDnsServer, secondaryDnsServer). Returns empty dict if no
+            response.
+        """
+        path = f"/venues/{venue_id}/aps/{serial_number}/networkSettings"
+        response = self.client.get(path)
+        if not response:
+            return {}
+        return cast(Dict[str, Any], response)
+
+    def update_network_settings(
+        self,
+        venue_id: Union[int, str],
+        serial_number: str,
+        settings: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Update network settings for an AP.
+
+        Supported body fields (API validates format):
+            ipType: "DYNAMIC" | "STATIC" | null
+            ip: IPv4 address string
+            netmask: Subnet mask string
+            gateway: IPv4 address string
+            primaryDnsServer: IPv4 address string
+            secondaryDnsServer: IPv4 address string
+
+        Args:
+            venue_id: Venue ID.
+            serial_number: AP serial number.
+            settings: Network settings payload to send as JSON.
+
+        Returns:
+            Updated network settings or API response.
+
+        Raises:
+            ValueError: If the request fails or returns no response.
+        """
+        path = f"/venues/{venue_id}/aps/{serial_number}/networkSettings"
+        response = self.client.put(path, json=settings)
+        if not response:
+            raise ValueError(
+                f"Failed to update network settings for AP {serial_number} in venue {venue_id}"
+            )
+        return cast(Dict[str, Any], response)
