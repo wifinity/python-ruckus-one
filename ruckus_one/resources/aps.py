@@ -126,6 +126,7 @@ class APsResource:
         """Update an existing AP.
 
         Note: Update endpoint may vary. This attempts PUT /venues/aps/{serialNumber}.
+        The API requires venueId and serialNumber in the request body.
 
         Args:
             venue_id: Venue ID (for reference)
@@ -135,10 +136,11 @@ class APsResource:
         Returns:
             Updated AP data (may include requestId for async operations)
         """
-        # Try PUT to /venues/aps/{serialNumber}
+        # Ensure body includes venueId and serialNumber (API requires them)
+        payload = {**data, "venueId": str(venue_id), "serialNumber": serial_number}
         path = f"{self._get_path()}/{serial_number}"
         try:
-            response = self.client.put(path, json=data)
+            response = self.client.put(path, json=payload)
             if response:
                 return cast(Dict[str, Any], response)
         except RuckusOneNotFoundError:
