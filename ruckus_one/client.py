@@ -28,6 +28,7 @@ from ruckus_one.resources import (
     APGroupsResource,
     APsResource,
     ActivitiesResource,
+    DpskServicesResource,
     VenuesResource,
     RadiusServerProfilesResource,
     WiFiNetworksResource,
@@ -101,6 +102,7 @@ class RuckusOneClient:
         self.ap_groups = APGroupsResource(self)
         self.activities = ActivitiesResource(self)
         self.radius_server_profiles = RadiusServerProfilesResource(self)
+        self.dpsk_services = DpskServicesResource(self)
 
         logger.debug(
             f"RuckusOneClient initialized with region={region}, "

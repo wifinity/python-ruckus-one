@@ -7,6 +7,7 @@ from ruckus_one.resources.base import BaseResource
 from ruckus_one.resources.radius_server_profiles import (
     RadiusServerProfilesResource,
 )
+from ruckus_one.resources.dpsk_services import DpskServicesResource
 from ruckus_one.resources.venues import VenuesResource
 from ruckus_one.resources.wifi_networks import WiFiNetworksResource
 
@@ -18,4 +19,5 @@ __all__ = [
     "APGroupsResource",
     "ActivitiesResource",
     "RadiusServerProfilesResource",
+    "DpskServicesResource",
 ]
