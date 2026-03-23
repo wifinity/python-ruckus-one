@@ -18,6 +18,7 @@ from ruckus_one.resources import (
     APsResource,
     ActivitiesResource,
     BaseResource,
+    RadiusServerProfilesResource,
     VenuesResource,
     WiFiNetworksResource,
 )
@@ -37,5 +38,6 @@ __all__ = [
     "WiFiNetworksResource",
     "APGroupsResource",
     "ActivitiesResource",
+    "RadiusServerProfilesResource",
     "set_log_level",
 ]
