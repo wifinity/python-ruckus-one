@@ -209,6 +209,52 @@ class APGroupsResource:
             )
         return cast(Dict[str, Any], response)
 
+    def remove_ap(
+        self,
+        venue_id: Union[int, str],
+        group_id: Union[int, str],
+        serial_number: str,
+    ) -> Dict[str, Any]:
+        """Remove an AP (by serial number) from an AP group.
+
+        Ruckus One has no member-scoped add/remove endpoint, so this reads the
+        group, filters the serial out of ``apSerialNumbers``, and PUTs the
+        remaining list back via ``update()`` -- the inverse of the add path
+        (see ``st2/ruckusone/actions/add_ap_to_ap_group.py``).
+
+        Idempotent: if the serial is not a member of the group, no PUT is made
+        and the group is returned unchanged.
+
+        Args:
+            venue_id: Venue ID
+            group_id: AP group ID
+            serial_number: AP serial number to remove from the group
+
+        Returns:
+            The ``update()`` result when a removal happens, or the fetched
+            group unchanged when the serial was not a member.
+
+        Raises:
+            RuckusOneNotFoundError: If the AP group is not found
+        """
+        group = self.get(venue_id, group_id)
+        current = list(group.get("apSerialNumbers") or [])
+
+        if serial_number not in current:
+            logger.debug(
+                f"Serial {serial_number} not in AP group {group_id} "
+                f"(venue {venue_id}); no update needed"
+            )
+            return group
+
+        remaining = [s for s in current if s != serial_number]
+        return self.update(
+            venue_id=venue_id,
+            id=group_id,
+            name=group["name"],
+            apSerialNumbers=remaining,
+        )
+
     def activate_network(
         self,
         venue_id: Union[int, str],

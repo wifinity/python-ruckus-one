@@ -219,3 +219,64 @@ def test_ap_groups_deactivate_network(mock_client):
     mock_client.delete.assert_called_once_with(
         "/venues/venue_1/wifiNetworks/network_1/apGroups/apgroup_1"
     )
+
+
+def test_ap_groups_remove_ap_present(mock_client):
+    """Removing a member serial PUTs back the group without it."""
+    mock_client.get.return_value = {
+        "id": "1",
+        "name": "Test Group",
+        "apSerialNumbers": ["ABC123", "DEF456"],
+    }
+    mock_client.put.return_value = {
+        "id": "1",
+        "name": "Test Group",
+        "apSerialNumbers": ["DEF456"],
+    }
+
+    resource = APGroupsResource(mock_client)
+    result = resource.remove_ap("venue_1", "1", "ABC123")
+
+    assert result["apSerialNumbers"] == ["DEF456"]
+    mock_client.get.assert_called_once_with("/venues/venue_1/apGroups/1")
+    mock_client.put.assert_called_once_with(
+        "/venues/venue_1/apGroups/1",
+        json={"name": "Test Group", "apSerialNumbers": ["DEF456"]},
+    )
+
+
+def test_ap_groups_remove_ap_absent_noop(mock_client):
+    """Removing a serial that isn't a member is a no-op (no PUT)."""
+    group = {
+        "id": "1",
+        "name": "Test Group",
+        "apSerialNumbers": ["DEF456"],
+    }
+    mock_client.get.return_value = group
+
+    resource = APGroupsResource(mock_client)
+    result = resource.remove_ap("venue_1", "1", "ABC123")
+
+    assert result == group
+    mock_client.put.assert_not_called()
+
+
+def test_ap_groups_remove_ap_empty_serials_noop(mock_client):
+    """Removing from a group with no serials is a no-op (no PUT)."""
+    mock_client.get.return_value = {"id": "1", "name": "Test Group"}
+
+    resource = APGroupsResource(mock_client)
+    resource.remove_ap("venue_1", "1", "ABC123")
+
+    mock_client.put.assert_not_called()
+
+
+def test_ap_groups_remove_ap_group_not_found(mock_client):
+    """Removing from a missing group raises RuckusOneNotFoundError."""
+    mock_client.get.return_value = None
+
+    resource = APGroupsResource(mock_client)
+    with pytest.raises(RuckusOneNotFoundError):
+        resource.remove_ap("venue_1", "missing", "ABC123")
+
+    mock_client.put.assert_not_called()
