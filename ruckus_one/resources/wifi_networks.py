@@ -84,7 +84,10 @@ class WiFiNetworksResource(BaseResource):
         return cast(Optional[Dict[str, Any]], self.client.delete(path, params=params))
 
     def list_venue_networks(
-        self, venue_id: Union[int, str], network_id: Optional[Union[int, str]] = None
+        self,
+        venue_id: Union[int, str],
+        network_id: Optional[Union[int, str]] = None,
+        fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """List networks activated at a venue.
 
@@ -93,14 +96,20 @@ class WiFiNetworksResource(BaseResource):
         Args:
             venue_id: Venue ID
             network_id: Optional network ID to filter by specific network
+            fields: Optional response-field selector. Pass ``["apGroups"]`` to have
+                each activation include its ``apGroups`` membership array (present
+                only when ``isAllApGroups`` is False); without it the response omits
+                per-AP-group membership.
 
         Returns:
             List of network activations for the venue
         """
         path = "/networkActivations/query"
-        body = {"venueId": str(venue_id)}
+        body: Dict[str, Any] = {"venueId": str(venue_id)}
         if network_id is not None:
             body["networkId"] = str(network_id)
+        if fields is not None:
+            body["fields"] = list(fields)
         response = self.client.post(path, json=body)
         if not response:
             return []
@@ -284,3 +293,33 @@ class WiFiNetworksResource(BaseResource):
                 f"Failed to update settings for network {network_id} at venue {venue_id}"
             )
         return cast(Dict[str, Any], response)
+
+    def set_ap_group_scope(
+        self,
+        venue_id: Union[int, str],
+        network_id: Union[int, str],
+        *,
+        all_ap_groups: bool,
+    ) -> Dict[str, Any]:
+        """Set whether a venue activation targets all AP groups or specific ones.
+
+        A venue activation defaults to ``isAllApGroups=True`` (the network broadcasts
+        from every AP group in the venue). Set ``all_ap_groups=False`` to switch it
+        into specific-AP-group mode, after which membership is managed per group via
+        ``ap_groups.activate_network`` / ``ap_groups.deactivate_network``.
+
+        Ordering matters: this flip must complete (poll the returned ``requestId`` via
+        ``client.activities.wait_for_completion``) before adding group memberships —
+        membership added while ``isAllApGroups=True`` is discarded on the flip.
+
+        Args:
+            venue_id: Venue ID
+            network_id: Wi-Fi network ID
+            all_ap_groups: True = broadcast from all AP groups; False = specific groups.
+
+        Returns:
+            Update response (may include ``requestId`` for async completion).
+        """
+        return self.update_venue_settings(
+            venue_id, network_id, isAllApGroups=bool(all_ap_groups)
+        )

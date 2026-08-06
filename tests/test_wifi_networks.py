@@ -98,6 +98,63 @@ def test_wifi_networks_list_venue_networks_with_network_id(mock_client):
     )
 
 
+def test_wifi_networks_list_venue_networks_with_fields(mock_client):
+    """Test that the fields selector is forwarded (e.g. apGroups membership)."""
+    mock_client.post.return_value = {
+        "data": [
+            {
+                "networkId": "network_1",
+                "venueId": "venue_1",
+                "isAllApGroups": False,
+                "apGroups": [{"apGroupId": "grp_1", "id": "membership_1"}],
+            }
+        ]
+    }
+
+    resource = WiFiNetworksResource(mock_client)
+    activations = resource.list_venue_networks(
+        "venue_1", network_id="network_1", fields=["apGroups"]
+    )
+
+    assert activations[0]["apGroups"][0]["apGroupId"] == "grp_1"
+    mock_client.post.assert_called_once_with(
+        "/networkActivations/query",
+        json={
+            "venueId": "venue_1",
+            "networkId": "network_1",
+            "fields": ["apGroups"],
+        },
+    )
+
+
+def test_wifi_networks_set_ap_group_scope_specific(mock_client):
+    """Test switching a venue activation into specific-AP-group mode."""
+    mock_client.put.return_value = {"requestId": "req_123"}
+
+    resource = WiFiNetworksResource(mock_client)
+    result = resource.set_ap_group_scope("venue_1", "network_1", all_ap_groups=False)
+
+    assert result == {"requestId": "req_123"}
+    mock_client.put.assert_called_once_with(
+        "/venues/venue_1/wifiNetworks/network_1/settings",
+        json={"isAllApGroups": False},
+    )
+
+
+def test_wifi_networks_set_ap_group_scope_all(mock_client):
+    """Test switching a venue activation back to all-AP-groups mode."""
+    mock_client.put.return_value = {"requestId": "req_456"}
+
+    resource = WiFiNetworksResource(mock_client)
+    result = resource.set_ap_group_scope("venue_1", "network_1", all_ap_groups=True)
+
+    assert result == {"requestId": "req_456"}
+    mock_client.put.assert_called_once_with(
+        "/venues/venue_1/wifiNetworks/network_1/settings",
+        json={"isAllApGroups": True},
+    )
+
+
 def test_wifi_networks_deactivate_at_venue(mock_client):
     """Test deactivating network at venue."""
     mock_client.delete.return_value = {"requestId": "req_123"}
