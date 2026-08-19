@@ -1,6 +1,6 @@
 """Ruckus One API Python Client Library."""
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
 from ruckus_one.client import RuckusOneClient
 from ruckus_one.exceptions import (

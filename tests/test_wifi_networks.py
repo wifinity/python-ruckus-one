@@ -216,6 +216,57 @@ def test_wifi_networks_create_with_wlan_dict(mock_client):
     )
 
 
+def test_wifi_networks_create_does_not_mutate_caller_wlan(mock_client):
+    """create() must shape its request on a copy, never on the caller's wlan dict.
+
+    A consumer that keeps its request payload (e.g. to compare it against what the
+    controller reports afterwards) would be silently corrupted if the SDK folded
+    ``ssid``/``type`` into the dict it was handed. Guards against re-introducing
+    that mutation.
+    """
+    mock_client.post.return_value = {
+        "id": "1",
+        "name": "Test Network",
+        "type": "psk",
+        "wlan": {"ssid": "TestSSID"},
+    }
+
+    resource = WiFiNetworksResource(mock_client)
+    caller_wlan = {"ssid": "TestSSID", "advancedCustomization": {"proxyARP": True}}
+    nested = caller_wlan["advancedCustomization"]
+
+    resource.create(name="Test Network", wlan=caller_wlan, type="psk")
+
+    # Caller's dict is unchanged: no injected ``type`` discriminator, ssid intact,
+    # and the nested dict is the same untouched object.
+    assert caller_wlan == {
+        "ssid": "TestSSID",
+        "advancedCustomization": {"proxyARP": True},
+    }
+    assert "type" not in caller_wlan
+    assert caller_wlan["advancedCustomization"] is nested
+
+    # ...but the wire payload still carries the discriminator the create endpoint needs.
+    sent_wlan = mock_client.post.call_args[1]["json"]["wlan"]
+    assert sent_wlan["type"] == "psk"
+    assert sent_wlan["ssid"] == "TestSSID"
+
+
+def test_wifi_networks_create_does_not_mutate_caller_wlan_ssid_param(mock_client):
+    """The ssid-as-top-level-parameter path must not populate the caller's wlan in place."""
+    mock_client.post.return_value = {"id": "1", "name": "Test Network"}
+
+    resource = WiFiNetworksResource(mock_client)
+    caller_wlan = {}
+
+    resource.create(name="Test Network", ssid="TestSSID", wlan=caller_wlan, type="open")
+
+    # ssid was injected into the SDK's copy, not the caller's dict.
+    assert caller_wlan == {}
+    sent_wlan = mock_client.post.call_args[1]["json"]["wlan"]
+    assert sent_wlan == {"ssid": "TestSSID", "type": "open"}
+
+
 def test_wifi_networks_create_missing_required_fields(mock_client):
     """Test creating a Wi-Fi network without required fields."""
     resource = WiFiNetworksResource(mock_client)

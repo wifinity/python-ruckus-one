@@ -203,6 +203,18 @@ class WiFiNetworksResource(BaseResource):
         Validates that type is one of the allowed network types and restructures
         the request body to nest ssid inside a wlan object.
 
+        The caller's ``wlan`` dict is never modified: this method shapes the
+        request on a copy, so a consumer that keeps its request payload (e.g. to
+        compare it against what the controller reports afterwards) is unaffected.
+
+        Payload-shaping note — ``create`` vs ``update``: ``create`` injects the
+        ``wlan.type`` discriminator because the create endpoint needs it for
+        polymorphic deserialization of the WLAN sub-object. The inherited
+        ``update`` (``BaseResource.update``) deliberately does **not** inject it:
+        a network's ``type`` is fixed at creation, and the controller reports
+        ``type`` on the network rather than inside ``wlan``. The asymmetry is
+        intentional, not an oversight.
+
         Args:
             **kwargs: Network data to create (must include name, type, and either
                      ssid as top-level param or wlan dict with ssid)
@@ -225,9 +237,9 @@ class WiFiNetworksResource(BaseResource):
         if wlan and not isinstance(wlan, dict):
             raise ValueError("wlan must be a dictionary")
 
-        # If wlan is not provided or is empty, create it
-        if not wlan:
-            wlan = {}
+        # Shape the request on a copy so the caller's dict is never mutated.
+        # Shallow is enough: only top-level keys (ssid, type) are added below.
+        wlan = dict(wlan) if wlan else {}
 
         # If ssid was provided as top-level parameter, add it to wlan
         if ssid is not None:
@@ -240,6 +252,7 @@ class WiFiNetworksResource(BaseResource):
             )
 
         # API expects type discriminator inside wlan for polymorphic deserialization
+        # on create only (see the create/update note in this method's docstring).
         network_type = kwargs.get("type")
         if network_type:
             wlan["type"] = network_type
