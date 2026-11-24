@@ -16,11 +16,89 @@ class VenuesResource(BaseResource):
     """Resource for managing venues."""
 
     _required_fields_create = ["name", "address"]
+    _QUERY_PAGE_SIZE = 100
 
     def __init__(self, client: Any) -> None:
         """Initialize venues resource."""
         path = "/venues"
         super().__init__(client, path)
+
+    def _query(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """POST a body to /venues/query and return the response dict."""
+        response = self.client.post(f"{self.path}/query", json=body)
+        return response if isinstance(response, dict) else {}
+
+    def all(self) -> List[Dict[str, Any]]:
+        """Get all venues by paging through POST /venues/query.
+
+        The venue collection accepts POST only: GET /venues returns 405.
+
+        Returns:
+            List of all venues across all pages
+        """
+        venues: List[Dict[str, Any]] = []
+        page = 1
+
+        while True:
+            response = self._query({"page": page, "pageSize": self._QUERY_PAGE_SIZE})
+            items = response.get("data") or []
+            venues.extend(items)
+
+            total = response.get("totalCount")
+            if len(items) < self._QUERY_PAGE_SIZE:
+                break
+            if isinstance(total, int) and len(venues) >= total:
+                break
+            page += 1
+
+        logger.debug(f"Fetched {len(venues)} venues from {self.path}/query")
+        return venues
+
+    def get(
+        self, id: Optional[Union[int, str]] = None, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """Get a single venue by ID or by filter parameters.
+
+        A lookup by `name` alone resolves the ID with an exact-match
+        `filters.name` query, then fetches the full venue by ID, so the result
+        has the same shape as a lookup by ID. Any other filter falls back to
+        client-side filtering over `all()`.
+
+        Args:
+            id: Venue ID (optional if using filter parameters)
+            **kwargs: Filter parameters to search by (e.g., name="Venue Name")
+
+        Returns:
+            Venue data
+
+        Raises:
+            RuckusOneNotFoundError: If no venue matches
+            ValueError: If multiple venues match or parameters are invalid
+        """
+        if id is not None or set(kwargs) != {"name"}:
+            return super().get(id, **kwargs)
+
+        name = kwargs["name"]
+        response = self._query(
+            {
+                "page": 1,
+                "pageSize": self._QUERY_PAGE_SIZE,
+                "fields": ["id", "name"],
+                "filters": {"name": [name]},
+            }
+        )
+        matches = response.get("data") or []
+
+        if not matches:
+            raise RuckusOneNotFoundError(f"Venue with name '{name}' not found")
+        if len(matches) > 1:
+            raise ValueError(f"Multiple venues found with name '{name}'")
+
+        venue_id = matches[0].get("id")
+        if not venue_id:
+            raise ValueError(f"Venue query result for '{name}' has no id")
+
+        return super().get(id=venue_id)
 
     def get_by_name(self, name: str, use_cache: bool = True) -> Dict[str, Any]:
         """Get venue by name, with optional caching.

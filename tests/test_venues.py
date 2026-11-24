@@ -16,10 +16,11 @@ def test_venues_resource_initialization(mock_client):
 
 
 def test_venues_all(mock_client):
-    """Test listing all venues."""
-    mock_client.get.return_value = {
+    """Test listing all venues uses POST /venues/query, never GET /venues."""
+    mock_client.post.return_value = {
+        "totalCount": 1,
+        "page": 1,
         "data": [{"id": "1", "name": "Venue 1"}],
-        "meta": {"total": 1},
     }
 
     resource = VenuesResource(mock_client)
@@ -27,6 +28,53 @@ def test_venues_all(mock_client):
 
     assert len(venues) == 1
     assert venues[0]["name"] == "Venue 1"
+    mock_client.post.assert_called_once_with(
+        "/venues/query", json={"page": 1, "pageSize": 100}
+    )
+    mock_client.get.assert_not_called()
+
+
+def test_venues_all_paginates(mock_client):
+    """Test all() requests further pages until totalCount is reached."""
+    page_size = VenuesResource._QUERY_PAGE_SIZE
+    first = [{"id": str(i), "name": f"Venue {i}"} for i in range(page_size)]
+    second = [{"id": "last", "name": "Last Venue"}]
+    mock_client.post.side_effect = [
+        {"totalCount": page_size + 1, "page": 1, "data": first},
+        {"totalCount": page_size + 1, "page": 2, "data": second},
+    ]
+
+    resource = VenuesResource(mock_client)
+    venues = resource.all()
+
+    assert len(venues) == page_size + 1
+    assert venues[-1]["id"] == "last"
+    assert [c.kwargs["json"]["page"] for c in mock_client.post.call_args_list] == [
+        1,
+        2,
+    ]
+
+
+def test_venues_all_stops_at_total_count_on_full_page(mock_client):
+    """Test all() stops when a full page brings the count to totalCount."""
+    page_size = VenuesResource._QUERY_PAGE_SIZE
+    full = [{"id": str(i), "name": f"Venue {i}"} for i in range(page_size)]
+    mock_client.post.return_value = {"totalCount": page_size, "data": full}
+
+    resource = VenuesResource(mock_client)
+    venues = resource.all()
+
+    assert len(venues) == page_size
+    mock_client.post.assert_called_once()
+
+
+def test_venues_all_empty(mock_client):
+    """Test all() returns an empty list when the query returns nothing."""
+    mock_client.post.return_value = None
+
+    resource = VenuesResource(mock_client)
+
+    assert resource.all() == []
 
 
 def test_venues_get_by_id(mock_client):
@@ -50,15 +98,99 @@ def test_venues_get_by_id_not_found(mock_client):
 
 
 def test_venues_get_by_name(mock_client):
-    """Test getting venue by name."""
-    # all() method calls client.get() with pagination params
-    mock_client.get.return_value = {"data": [{"id": "1", "name": "Test Venue"}]}
+    """Test get_by_name resolves the ID by query, then fetches the venue."""
+    mock_client.post.return_value = {
+        "totalCount": 1,
+        "data": [{"id": "1", "name": "Test Venue"}],
+    }
+    mock_client.get.return_value = {
+        "id": "1",
+        "name": "Test Venue",
+        "address": {"city": "Test City"},
+    }
 
     resource = VenuesResource(mock_client)
     venue = resource.get_by_name("Test Venue")
 
     assert venue["name"] == "Test Venue"
-    assert "1" in resource._name_cache["Test Venue"]
+    assert venue["address"] == {"city": "Test City"}
+    assert resource._name_cache["Test Venue"] == "1"
+
+
+def test_venues_get_name_uses_exact_query_filter(mock_client):
+    """Test get(name=...) sends a filters.name query and GETs the venue by ID."""
+    mock_client.post.return_value = {
+        "totalCount": 1,
+        "data": [{"id": "abc", "name": "BUTLSKEG"}],
+    }
+    mock_client.get.return_value = {"id": "abc", "name": "BUTLSKEG"}
+
+    resource = VenuesResource(mock_client)
+    venue = resource.get(name="BUTLSKEG")
+
+    assert venue == {"id": "abc", "name": "BUTLSKEG"}
+    mock_client.post.assert_called_once_with(
+        "/venues/query",
+        json={
+            "page": 1,
+            "pageSize": 100,
+            "fields": ["id", "name"],
+            "filters": {"name": ["BUTLSKEG"]},
+        },
+    )
+    mock_client.get.assert_called_once_with("/venues/abc")
+
+
+def test_venues_get_name_not_found(mock_client):
+    """Test get(name=...) raises NotFound when the query has no match."""
+    mock_client.post.return_value = {"totalCount": 0, "page": 1, "data": []}
+
+    resource = VenuesResource(mock_client)
+    with pytest.raises(RuckusOneNotFoundError):
+        resource.get(name="Missing")
+    mock_client.get.assert_not_called()
+
+
+def test_venues_get_name_multiple_matches(mock_client):
+    """Test get(name=...) raises ValueError when the query matches twice."""
+    mock_client.post.return_value = {
+        "totalCount": 2,
+        "data": [{"id": "1", "name": "Dup"}, {"id": "2", "name": "Dup"}],
+    }
+
+    resource = VenuesResource(mock_client)
+    with pytest.raises(ValueError, match="Multiple venues"):
+        resource.get(name="Dup")
+    mock_client.get.assert_not_called()
+
+
+def test_venues_get_name_match_without_id(mock_client):
+    """Test get(name=...) raises ValueError when the match carries no id."""
+    mock_client.post.return_value = {"totalCount": 1, "data": [{"name": "NoId"}]}
+
+    resource = VenuesResource(mock_client)
+    with pytest.raises(ValueError, match="has no id"):
+        resource.get(name="NoId")
+
+
+def test_venues_get_other_filters_use_query_listing(mock_client):
+    """Test get() with non-name filters filters all() results client-side."""
+    mock_client.post.return_value = {
+        "totalCount": 2,
+        "data": [
+            {"id": "1", "name": "A", "countryCode": "GB"},
+            {"id": "2", "name": "B", "countryCode": "IE"},
+        ],
+    }
+
+    resource = VenuesResource(mock_client)
+    venue = resource.get(countryCode="IE")
+
+    assert venue["id"] == "2"
+    mock_client.post.assert_called_once_with(
+        "/venues/query", json={"page": 1, "pageSize": 100}
+    )
+    mock_client.get.assert_not_called()
 
 
 def test_venues_create(mock_client):
