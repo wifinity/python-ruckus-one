@@ -78,7 +78,8 @@ def test_wifi_networks_list_venue_networks(mock_client):
 
     assert len(activations) == 1
     mock_client.post.assert_called_once_with(
-        "/networkActivations/query", json={"venueId": "venue_1"}
+        "/networkActivations/query",
+        json={"filters": [{"venueId": "venue_1"}], "page": 1, "pageSize": 100},
     )
 
 
@@ -94,7 +95,11 @@ def test_wifi_networks_list_venue_networks_with_network_id(mock_client):
     assert len(activations) == 1
     mock_client.post.assert_called_once_with(
         "/networkActivations/query",
-        json={"venueId": "venue_1", "networkId": "network_1"},
+        json={
+            "filters": [{"venueId": "venue_1", "networkId": "network_1"}],
+            "page": 1,
+            "pageSize": 100,
+        },
     )
 
 
@@ -120,11 +125,51 @@ def test_wifi_networks_list_venue_networks_with_fields(mock_client):
     mock_client.post.assert_called_once_with(
         "/networkActivations/query",
         json={
-            "venueId": "venue_1",
-            "networkId": "network_1",
+            "filters": [{"venueId": "venue_1", "networkId": "network_1"}],
+            "page": 1,
+            "pageSize": 100,
             "fields": ["apGroups"],
         },
     )
+
+
+def test_wifi_networks_list_venue_networks_follows_pages(mock_client):
+    """Every page of a venue's activations is fetched."""
+    resource = WiFiNetworksResource(mock_client)
+    resource._ACTIVATION_QUERY_PAGE_SIZE = 2
+    mock_client.post.side_effect = [
+        {"data": [{"id": "a1"}, {"id": "a2"}], "totalCount": 3},
+        {"data": [{"id": "a3"}], "totalCount": 3},
+    ]
+
+    activations = resource.list_venue_networks("venue_1")
+
+    assert [a["id"] for a in activations] == ["a1", "a2", "a3"]
+    assert [c.kwargs["json"]["page"] for c in mock_client.post.call_args_list] == [1, 2]
+
+
+def test_wifi_networks_list_venue_networks_stops_at_total_count(mock_client):
+    """A full last page ends the listing once totalCount is reached."""
+    resource = WiFiNetworksResource(mock_client)
+    resource._ACTIVATION_QUERY_PAGE_SIZE = 2
+    mock_client.post.return_value = {
+        "data": [{"id": "a1"}, {"id": "a2"}],
+        "totalCount": 2,
+    }
+
+    activations = resource.list_venue_networks("venue_1")
+
+    assert len(activations) == 2
+    mock_client.post.assert_called_once()
+
+
+def test_wifi_networks_list_venue_networks_empty_response(mock_client):
+    """An empty response is no activations."""
+    mock_client.post.return_value = {}
+
+    resource = WiFiNetworksResource(mock_client)
+
+    assert resource.list_venue_networks("venue_1", network_id="network_1") == []
 
 
 def test_wifi_networks_set_ap_group_scope_specific(mock_client):

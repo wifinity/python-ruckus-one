@@ -83,6 +83,8 @@ class WiFiNetworksResource(BaseResource):
         params = {"deep": "true"} if deep else {}
         return cast(Optional[Dict[str, Any]], self.client.delete(path, params=params))
 
+    _ACTIVATION_QUERY_PAGE_SIZE = 100
+
     def list_venue_networks(
         self,
         venue_id: Union[int, str],
@@ -91,7 +93,10 @@ class WiFiNetworksResource(BaseResource):
     ) -> List[Dict[str, Any]]:
         """List networks activated at a venue.
 
-        Uses POST /networkActivations/query with body containing venueId and optionally networkId.
+        Uses POST /networkActivations/query, filtered on the venue and optionally the
+        network, and follows every page. The endpoint reads its filter only from
+        ``filters`` (a list of match objects); top-level ``venueId``/``networkId`` keys
+        are ignored and return every activation in the tenant.
 
         Args:
             venue_id: Venue ID
@@ -105,21 +110,38 @@ class WiFiNetworksResource(BaseResource):
             List of network activations for the venue
         """
         path = "/networkActivations/query"
-        body: Dict[str, Any] = {"venueId": str(venue_id)}
+        match: Dict[str, Any] = {"venueId": str(venue_id)}
         if network_id is not None:
-            body["networkId"] = str(network_id)
-        if fields is not None:
-            body["fields"] = list(fields)
-        response = self.client.post(path, json=body)
-        if not response:
-            return []
+            match["networkId"] = str(network_id)
+        page_size = self._ACTIVATION_QUERY_PAGE_SIZE
 
-        # Handle both dict-with-data and bare list responses
-        if isinstance(response, list):
-            return cast(List[Dict[str, Any]], response)
+        activations: List[Dict[str, Any]] = []
+        page = 1
+        while True:
+            body: Dict[str, Any] = {
+                "filters": [match],
+                "page": page,
+                "pageSize": page_size,
+            }
+            if fields is not None:
+                body["fields"] = list(fields)
+            response = self.client.post(path, json=body)
+            if not response:
+                break
+            if isinstance(response, list):
+                activations.extend(cast(List[Dict[str, Any]], response))
+                break
 
-        data = response.get("data", [])
-        return cast(List[Dict[str, Any]], data)
+            items = cast(List[Dict[str, Any]], response.get("data") or [])
+            activations.extend(items)
+            total = response.get("totalCount")
+            if len(items) < page_size:
+                break
+            if isinstance(total, int) and len(activations) >= total:
+                break
+            page += 1
+
+        return activations
 
     def activate_at_venue(
         self, venue_id: Union[int, str], network_id: Union[int, str]
