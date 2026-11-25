@@ -17,6 +17,7 @@ class DpskServicesResource:
         "passphraseFormat",
         "networkCount",
     ]
+    _SEARCH_PAGE_SIZE = 100
 
     def __init__(self, client: Any) -> None:
         self.client = client
@@ -30,17 +31,9 @@ class DpskServicesResource:
         if not isinstance(response, dict):
             return []
 
-        # Observed shapes:
-        # - POST /dpskServices/query: { "data": [...] }
-        # - GET /dpskServices?name=...: { "content": [...], "pageable": {...} }
         items = response.get("data")
         if isinstance(items, list):
             return cast(List[Dict[str, Any]], items)
-
-        content = response.get("content")
-        if isinstance(content, list):
-            return cast(List[Dict[str, Any]], content)
-
         return []
 
     def _extract_total(self, response: Any) -> Optional[int]:
@@ -63,27 +56,16 @@ class DpskServicesResource:
 
         return None
 
-    def list(
-        self,
-        page_size: int = 50,
-        fields: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
-        """List all DPSK service profiles.
-
-        Uses POST /dpskServices/query with pagination.
-        """
-        effective_fields = fields or self._DEFAULT_FIELDS
-
+    def _query_all(self, body: Dict[str, Any], page_size: int) -> List[Dict[str, Any]]:
+        """Page through POST /dpskServices/query with ``body``."""
         results: List[Dict[str, Any]] = []
         page = 1
 
         while True:
-            body = {
-                "page": page,
-                "pageSize": page_size,
-                "fields": effective_fields,
-            }
-            response = self.client.post("/dpskServices/query", json=body)
+            response = self.client.post(
+                "/dpskServices/query",
+                json={**body, "page": page, "pageSize": page_size},
+            )
 
             items = self._extract_items(response)
             if not items:
@@ -91,7 +73,6 @@ class DpskServicesResource:
 
             results.extend(items)
 
-            # Stop if the page is not full.
             if len(items) < page_size:
                 break
 
@@ -103,6 +84,17 @@ class DpskServicesResource:
 
         return results
 
+    def list(
+        self,
+        page_size: int = 50,
+        fields: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """List all DPSK service profiles.
+
+        Uses POST /dpskServices/query with pagination.
+        """
+        return self._query_all({"fields": fields or self._DEFAULT_FIELDS}, page_size)
+
     def get_by_name(
         self,
         name: str,
@@ -110,19 +102,18 @@ class DpskServicesResource:
     ) -> Dict[str, Any]:
         """Get a single DPSK service profile by exact name.
 
-        Uses GET /dpskServices with query parameter `name` (exact match).
+        Searches POST /dpskServices/query with ``searchString`` on ``name`` and
+        keeps the rows whose name equals ``name`` exactly: the search is a
+        substring match, so ``"Pool"`` also returns ``"Pool 2"``.
 
-        Notes:
-            - The backend POST /dpskServices/query endpoint can behave like a loose
-              search (returning multiple results) even when matchFields is used.
-            - This GET endpoint is deprecated upstream, but currently provides the
-              most direct exact-name filtering behavior.
-            - By default, the API response includes many fields; this method
-              returns the full object. If `fields` is provided, the result is
-              projected down to those keys only.
+        Query rows are full pool objects. If ``fields`` is provided, the result
+        is projected down to those keys only.
         """
-        response = self.client.get("/dpskServices", params={"name": name})
-        items = self._extract_items(response)
+        rows = self._query_all(
+            {"searchString": name, "searchTargetFields": ["name"]},
+            self._SEARCH_PAGE_SIZE,
+        )
+        items = [row for row in rows if row.get("name") == name]
 
         if not items:
             raise RuckusOneNotFoundError(
@@ -133,9 +124,6 @@ class DpskServicesResource:
             raise ValueError(f"Multiple DPSK service profiles found with name '{name}'")
 
         profile = cast(Dict[str, Any], items[0])
-        # By default, return the full object (API may return additional fields even
-        # if a `fields` list is provided). If the caller explicitly supplies
-        # `fields=...`, project down to those keys only.
         if fields is None:
             return profile
 

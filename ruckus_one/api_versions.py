@@ -66,7 +66,7 @@ def normalise_template(path: str) -> str:
 ENDPOINTS: Tuple[Endpoint, ...] = (
     Endpoint("GET", "/activities/{activityId}", None, "1"),
     # AP groups
-    Endpoint("GET", "/venues/{venueId}/apGroups"),
+    Endpoint("POST", "/venues/apGroups/query", "1", "1"),
     Endpoint("GET", "/venues/{venueId}/apGroups/{apGroupId}", None, "1"),
     Endpoint("POST", "/venues/{venueId}/apGroups", "1.1", "1.1"),
     Endpoint("PUT", "/venues/{venueId}/apGroups/{apGroupId}", "1", "1"),
@@ -83,29 +83,27 @@ ENDPOINTS: Tuple[Endpoint, ...] = (
         "1",
     ),
     # APs
-    Endpoint("GET", "/venues/aps"),
-    Endpoint("GET", "/venues/aps/{serialNumber}"),
-    Endpoint("POST", "/venues/aps"),
+    Endpoint("POST", "/venues/aps/query", "1", "1"),
     Endpoint("PUT", "/venues/aps/{serialNumber}"),
-    Endpoint("DELETE", "/venues/aps"),
+    Endpoint("POST", "/venues/{venueId}/aps", "1", "1"),
+    Endpoint("GET", "/venues/{venueId}/aps/{serialNumber}", None, "1"),
+    Endpoint("DELETE", "/venues/{venueId}/aps/{serialNumber}", None, "1"),
     Endpoint("PATCH", "/venues/{venueId}/aps/{serialNumber}/neighbors", "1", "1"),
     Endpoint("POST", "/venues/{venueId}/aps/{serialNumber}/neighbors/query", "1", "1"),
     Endpoint("GET", "/venues/{venueId}/aps/{serialNumber}/networkSettings", None, "1"),
     Endpoint("PUT", "/venues/{venueId}/aps/{serialNumber}/networkSettings", "1", "1"),
     # DPSK and RADIUS profiles
     Endpoint("POST", "/dpskServices/query", None, "2"),
-    Endpoint("GET", "/dpskServices"),
     Endpoint("POST", "/radiusServerProfiles/query", "1", "1"),
     # Wi-Fi networks
-    Endpoint("GET", "/networks"),
-    Endpoint("GET", "/networks/{networkId}"),
-    Endpoint("POST", "/networks/query"),
-    Endpoint("POST", "/networks"),
-    Endpoint("PUT", "/networks/{networkId}"),
-    Endpoint("DELETE", "/networks/{networkId}"),
+    Endpoint("POST", "/wifiNetworks/query", "1", "1"),
+    Endpoint("POST", "/wifiNetworks", "1", "1"),
+    Endpoint("GET", "/wifiNetworks/{wifiNetworkId}", None, "1"),
+    Endpoint("PUT", "/wifiNetworks/{wifiNetworkId}", "1", "1"),
+    Endpoint("DELETE", "/wifiNetworks/{wifiNetworkId}", None, "1"),
     Endpoint("POST", "/networkActivations/query", "1", None),
-    Endpoint("POST", "/networkActivations"),
-    Endpoint("DELETE", "/networkActivations"),
+    Endpoint("PUT", "/venues/{venueId}/wifiNetworks/{wifiNetworkId}", "1", "1"),
+    Endpoint("DELETE", "/venues/{venueId}/wifiNetworks/{wifiNetworkId}", None, "1"),
     Endpoint(
         "GET", "/venues/{venueId}/wifiNetworks/{wifiNetworkId}/settings", None, "1"
     ),
@@ -113,12 +111,11 @@ ENDPOINTS: Tuple[Endpoint, ...] = (
         "PUT", "/venues/{venueId}/wifiNetworks/{wifiNetworkId}/settings", "1", "1"
     ),
     # Venues
-    Endpoint("GET", "/venues", None, "1"),
     Endpoint("GET", "/venues/{venueId}", None, "1"),
     Endpoint("POST", "/venues/query", "1", "1"),
     Endpoint("POST", "/venues", "1", "1"),
     Endpoint("PUT", "/venues/{venueId}", "1", "1"),
-    Endpoint("DELETE", "/venues", "1", "1"),
+    Endpoint("DELETE", "/venues/{venueId}", None, "1"),
 )
 
 

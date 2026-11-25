@@ -19,9 +19,9 @@ class TestFindEndpoint:
         assert endpoint.path == "/venues/{venueId}/aps/{serialNumber}/networkSettings"
 
     def test_literal_segment_beats_parameter(self):
-        endpoint = find_endpoint("GET", "/venues/aps")
+        endpoint = find_endpoint("POST", "/venues/aps/query")
         assert endpoint is not None
-        assert endpoint.path == "/venues/aps"
+        assert endpoint.path == "/venues/aps/query"
 
     def test_query_endpoint_is_distinct_from_create(self):
         query = find_endpoint("POST", "/venues/query")
@@ -116,7 +116,7 @@ class TestClientPinning:
 
     def test_unversioned_endpoint_keeps_default_headers(self):
         client, sent = make_client([httpx.Response(200, json={})])
-        client.post("/networks", json={"name": "n"})
+        client.put("/venues/aps/SN1", json={"name": "n"})
         assert "vnd.ruckus" not in sent[0].headers.get("Accept", "")
         assert sent[0].headers["Content-Type"] == "application/json"
 
@@ -188,3 +188,62 @@ class TestDeprecationWarning:
             with pytest.raises(Exception):
                 client.get("/venues/a")
         assert any("deprecation" in r.getMessage() for r in caplog.records)
+
+
+MIGRATED_CALLS = {
+    "wifi_networks.all": lambda c: c.wifi_networks.all(),
+    "wifi_networks.get(id)": lambda c: c.wifi_networks.get(id="n1"),
+    "wifi_networks.get(name)": lambda c: c.wifi_networks.get(name="Guest"),
+    "wifi_networks.filter": lambda c: c.wifi_networks.filter(filters={}),
+    "wifi_networks.create": lambda c: c.wifi_networks.create(
+        name="Guest", type="psk", ssid="Guest"
+    ),
+    "wifi_networks.update": lambda c: c.wifi_networks.update("n1", {"name": "n"}),
+    "wifi_networks.delete": lambda c: c.wifi_networks.delete("n1"),
+    "wifi_networks.activate_at_venue": lambda c: c.wifi_networks.activate_at_venue(
+        "v1", "n1"
+    ),
+    "wifi_networks.deactivate_at_venue": lambda c: (
+        c.wifi_networks.deactivate_at_venue("v1", "n1")
+    ),
+    "aps.get_by_serial": lambda c: c.aps.get_by_serial("v1", "SN1"),
+    "aps.list": lambda c: c.aps.list("v1"),
+    "aps.create": lambda c: c.aps.create("v1", serialNumber="SN1", name="AP"),
+    "aps.delete": lambda c: c.aps.delete("v1", ["SN1"]),
+    "ap_groups.list": lambda c: c.ap_groups.list("v1"),
+    "venues.filter": lambda c: c.venues.filter(filters={}),
+    "venues.delete": lambda c: c.venues.delete(["v1"]),
+    "dpsk_services.get_by_name": lambda c: c.dpsk_services.get_by_name("Pool"),
+}
+
+CANNED = {
+    "/venues/aps/query": {"data": [{"serialNumber": "SN1", "venueId": "v1"}]},
+    "/wifiNetworks/query": {"data": [{"id": "n1", "name": "Guest"}]},
+    "/dpskServices/query": {"data": [{"id": "d1", "name": "Pool"}]},
+}
+
+
+@pytest.mark.parametrize("name", sorted(MIGRATED_CALLS))
+def test_migrated_methods_only_call_inventoried_endpoints(name):
+    """Every request a migrated method sends matches an ENDPOINTS entry and is pinned."""
+    sent: List[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(
+            200, json=CANNED.get(request.url.path, {"id": "x", "requestId": "r"})
+        )
+
+    client, _ = make_client([])
+    client._client = httpx.Client(
+        base_url=client.base_url, transport=httpx.MockTransport(handler)
+    )
+
+    MIGRATED_CALLS[name](client)
+
+    assert sent
+    for request in sent:
+        endpoint = find_endpoint(request.method, request.url.path)
+        assert endpoint is not None, f"{request.method} {request.url.path}"
+        if endpoint.response_version:
+            assert request.headers["Accept"] == media_type(endpoint.response_version)

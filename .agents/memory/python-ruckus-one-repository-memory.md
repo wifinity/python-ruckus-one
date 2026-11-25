@@ -39,7 +39,7 @@ The project is “client library first”: the canonical entry is `RuckusOneClie
     - `APsResource` (AP operations + neighbor scan orchestration + AP networkSettings)
     - `APGroupsResource` (AP group CRUD + network activation/deactivation)
     - `RadiusServerProfilesResource` (list + exact name lookup via `/radiusServerProfiles/query`)
-    - `DpskServicesResource` (list via `/dpskServices/query`; exact `get_by_name` via deprecated `GET /dpskServices?name=...`)
+    - `DpskServicesResource` (list via `/dpskServices/query`; exact `get_by_name` = `searchString` query + client-side exact name match)
     - `ActivitiesResource` (polling async request status)
 
 ### Why this structure
@@ -139,8 +139,9 @@ The project is “client library first”: the canonical entry is `RuckusOneClie
       - `wlan["type"]` is set from top-level `type` (and `type` is also included at top-level for the base required-field validation).
     - Validates `type` against `_VALID_NETWORK_TYPES = ["aaa","dpsk","guest","hotspot20","open","psk"]` (lowercase only).
     - Provides network activation/deactivation + venue-specific settings APIs:
-      - `activate_at_venue(venue_id, network_id)` -> `POST /networkActivations`
-      - `deactivate_at_venue(network_venue_id|list)` -> `DELETE /networkActivations` with JSON array
+      - CRUD on `/wifiNetworks`; `all()`/`get(name=...)` page through `POST /wifiNetworks/query` (name lookup resolves the id, then `GET /wifiNetworks/{id}` for the full object)
+      - `activate_at_venue(venue_id, network_id)` -> `PUT /venues/{venue}/wifiNetworks/{network}` with `{}` (idempotent)
+      - `deactivate_at_venue(venue_id, network_id)` -> `DELETE /venues/{venue}/wifiNetworks/{network}`
       - `list_venue_networks(venue_id, network_id=None)` -> `POST /networkActivations/query`
       - `get_venue_settings(venue_id, network_id)` -> `GET /venues/{venue}/wifiNetworks/{network}/settings`
       - `update_venue_settings(...)` -> `PUT .../settings`
@@ -151,11 +152,11 @@ The project is “client library first”: the canonical entry is `RuckusOneClie
 - Class: `APsResource` (custom; does not inherit `BaseResource`)
   - What it does:
     - AP CRUD-ish operations and neighbor scan:
-      - `get_by_serial(venue_id, serial_number)` -> `GET /venues/aps/{serialNumber}` (note: `venue_id` currently unused)
-      - `list(venue_id=None, **filters)` -> `GET /venues/aps?venueId=...` (plus query params from `filters`)
-      - `create(venue_id, **kwargs)` -> `POST /venues/aps` with JSON array (API expects an array of AP objects)
+      - `get_by_serial(venue_id, serial_number)` -> `POST /venues/aps/query` (any venue) to find the AP's venue, then `GET /venues/{venue}/aps/{serial}`; returns the merged row + config with the real `venueId` (`venue_id` is only a fallback)
+      - `list(venue_id=None, **filters)` -> pages `POST /venues/aps/query`; kwargs become `filters` lists
+      - `create(venue_id, **kwargs)` -> `POST /venues/{venue}/aps` with a single AP object; returns `{requestId, response:{id}}`
       - `update(venue_id, serial_number, data)` -> currently attempts `PUT /venues/aps/{serialNumber}` with venueId + serialNumber in body; PATCH fallback is effectively unimplemented.
-      - `delete(venue_id, serial_number|list)` -> `DELETE /venues/aps` with JSON array body of serial numbers
+      - `delete(venue_id, serial_number|list)` -> one `DELETE /venues/{venue}/aps/{serial}` per AP, in the venue `POST /venues/aps/query` reports (fallback `venue_id`); a list returns `{"responses": [...]}`
     - Neighbor scan workflow:
       - `collect_neighbors(venue_id, serial_number, neighbor_type="LLDP_NEIGHBOR")`:
         - triggers scan asynchronously via `PATCH /venues/{venue}/aps/{serial}/neighbors`
@@ -173,7 +174,7 @@ The project is “client library first”: the canonical entry is `RuckusOneClie
   - What it does:
     - Uses assumed endpoints for AP groups:
       - base path: `/venues/{venue_id}/apGroups`
-      - `list(venue_id)` -> `GET {base}`
+      - `list(venue_id)` -> pages `POST /venues/apGroups/query` with `filters.venueId` (rows include `apSerialNumbers`, `isDefault`, `wifiNetworkIds`)
       - `get(venue_id, id)` -> `GET {base}/{id}`
       - `get_by_name(venue_id, name, use_cache=True)` -> client-side exact match over `list()` results; caches `venue_id -> name -> id`.
     - CRUD:
@@ -223,11 +224,11 @@ The project is “client library first”: the canonical entry is `RuckusOneClie
      - sets `wlan["type"] = kwargs["type"]`
    - passes final payload to `BaseResource.create(...)`:
      - enforces `_required_fields_create=["name","type","wlan"]`
-     - calls `client.post("/networks", json=payload)`
+     - calls `client.post("/wifiNetworks", json=payload)`
 4. If the API is async, response may include `requestId`.
 5. User triggers activation:
    - `client.wifi_networks.activate_at_venue(venue_id, network_id)`
-   - calls `POST /networkActivations` with `{venueId, networkId}`
+   - calls `PUT /venues/{venueId}/wifiNetworks/{networkId}` with `{}`
 6. If activation returns a `requestId`, user polls:
    - `client.activities.wait_for_completion(request_id, timeout, poll_interval)`
    - `ActivitiesResource.wait_for_completion(...)` loops:
@@ -294,7 +295,7 @@ The project is “client library first”: the canonical entry is `RuckusOneClie
 - Ruckus One API:
   - OAuth token endpoint: `/oauth2/token/{tenantId}`
   - Resources:
-    - `/venues`, `/venues/aps`, `/networks`, `/networkActivations`, and AP neighbor/query endpoints
+    - `/venues`, `/venues/aps/query`, `/venues/{venueId}/aps`, `/wifiNetworks`, `/networkActivations/query`, and AP neighbor/query endpoints
     - `/activities/{requestId}` for async polling.
 
 ## 7) Entry Points / How Execution Starts
@@ -318,7 +319,8 @@ The project is “client library first”: the canonical entry is `RuckusOneClie
   - Ruckus One returns the latest version of an endpoint unless the request names one; `ruckus_one/api_versions.py` pins every endpoint the SDK calls and the client sends the matching `Accept`/`Content-Type`.
   - Ruckus publishes API changes in dated batches (around the 20th of each month) under "Change History" on docs.ruckus.cloud, announces planned changes under "Upcoming Changes", and serves each OpenAPI spec at `https://docs.ruckus.cloud/_spec/{api|deprecated_apis}/<slug>.json`.
   - Deprecated operations are listed in a separate "Deprecated APIs" section; policy says removal happens in an annual March window, but the 2026-11-20 batch deleted operations outside it.
-  - The `/networks` CRUD, `/networkActivations` create/delete, `/venues/aps` list/create/delete, `GET /venues/{venueId}/apGroups`, `GET /venues` and `DELETE /venues` operations are deprecated; `POST /networks/query` and `GET /dpskServices` are absent from every published spec.
+  - The SDK calls no deprecated or removed operation (the 2026-11 drift report's 16 findings were migrated to `/wifiNetworks`, venue-scoped AP/activation endpoints and the `.../query` views).
+  - `POST /networkActivations/query` (used by `list_venue_networks`) is current but its only media type, v1, carries a "removed no sooner than 08/31/2026" notice; `POST /venues/wifiNetworks/query` is the likely successor (different row shape).
 
 - Typing vs runtime shape mismatch:
   - `RuckusOneClient.post/put/delete` JSON type hints are `Optional[Dict]`, but several resources pass JSON arrays/lists (e.g. AP create sends `json=[ap_data]`; AP delete sends `json=[serialNumbers]`; Venues/WiFi uses dicts).

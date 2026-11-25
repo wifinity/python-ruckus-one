@@ -12,21 +12,27 @@ def test_wifi_networks_resource_initialization(mock_client):
     """Test WiFiNetworksResource initialization."""
     resource = WiFiNetworksResource(mock_client)
     assert resource.client == mock_client
-    assert resource.path == "/networks"
+    assert resource.path == "/wifiNetworks"
 
 
 def test_wifi_networks_all(mock_client):
-    """Test listing all networks."""
-    mock_client.get.return_value = {
-        "data": [{"id": "1", "name": "Network 1"}],
-        "meta": {"total": 1},
-    }
+    """all() pages through POST /wifiNetworks/query."""
+    mock_client.post.side_effect = [
+        {"data": [{"id": str(i)} for i in range(100)], "totalCount": 101},
+        {"data": [{"id": "100"}], "totalCount": 101},
+    ]
 
     resource = WiFiNetworksResource(mock_client)
     networks = resource.all()
 
-    assert len(networks) == 1
-    assert networks[0]["name"] == "Network 1"
+    assert len(networks) == 101
+    assert mock_client.post.call_args_list[0].args == ("/wifiNetworks/query",)
+    assert mock_client.post.call_args_list[0].kwargs["json"] == {
+        "page": 1,
+        "pageSize": 100,
+    }
+    assert mock_client.post.call_args_list[1].kwargs["json"]["page"] == 2
+    mock_client.get.assert_not_called()
 
 
 def test_wifi_networks_get_by_id(mock_client):
@@ -40,31 +46,135 @@ def test_wifi_networks_get_by_id(mock_client):
     assert network["name"] == "Network 1"
 
 
+def test_wifi_networks_get_by_id_uses_wifi_networks_path(mock_client):
+    """get(id=...) reads GET /wifiNetworks/{id}."""
+    mock_client.get.return_value = {"id": "1", "name": "Network 1", "wlan": {}}
+
+    WiFiNetworksResource(mock_client).get(id="1")
+
+    mock_client.get.assert_called_once_with("/wifiNetworks/1")
+
+
+def test_wifi_networks_get_by_name_queries_then_reads_full_network(mock_client):
+    """get(name=...) resolves the id by query and returns the full network."""
+    mock_client.post.return_value = {
+        "data": [{"id": "net-1", "name": "Guest"}],
+        "totalCount": 1,
+    }
+    full = {"id": "net-1", "name": "Guest", "type": "psk", "wlan": {"ssid": "G"}}
+    mock_client.get.return_value = full
+
+    network = WiFiNetworksResource(mock_client).get(name="Guest")
+
+    assert network == full
+    mock_client.post.assert_called_once_with(
+        "/wifiNetworks/query",
+        json={
+            "fields": ["id", "name"],
+            "filters": {"name": ["Guest"]},
+            "page": 1,
+            "pageSize": 100,
+        },
+    )
+    mock_client.get.assert_called_once_with("/wifiNetworks/net-1")
+
+
+def test_wifi_networks_get_by_name_ignores_non_matching_rows(mock_client):
+    """Rows whose name differs are dropped; the match is case-insensitive."""
+    mock_client.post.return_value = {
+        "data": [{"id": "a", "name": "Guest 2"}, {"id": "b", "name": "guest"}]
+    }
+    mock_client.get.return_value = {"id": "b", "name": "guest"}
+
+    network = WiFiNetworksResource(mock_client).get(name="Guest")
+
+    assert network["id"] == "b"
+    mock_client.get.assert_called_once_with("/wifiNetworks/b")
+
+
+def test_wifi_networks_get_by_name_not_found(mock_client):
+    mock_client.post.return_value = {"data": [], "totalCount": 0}
+
+    with pytest.raises(RuckusOneNotFoundError):
+        WiFiNetworksResource(mock_client).get(name="Missing")
+    mock_client.get.assert_not_called()
+
+
+def test_wifi_networks_get_by_name_multiple(mock_client):
+    mock_client.post.return_value = {
+        "data": [{"id": "a", "name": "Dup"}, {"id": "b", "name": "Dup"}]
+    }
+
+    with pytest.raises(ValueError, match="Multiple"):
+        WiFiNetworksResource(mock_client).get(name="Dup")
+
+
+def test_wifi_networks_get_by_name_caches_id(mock_client):
+    """get_by_name() caches the id and reads by id on the next call."""
+    mock_client.post.return_value = {"data": [{"id": "net-1", "name": "Guest"}]}
+    mock_client.get.return_value = {"id": "net-1", "name": "Guest"}
+    resource = WiFiNetworksResource(mock_client)
+
+    resource.get_by_name("Guest")
+    resource.get_by_name("Guest")
+
+    assert mock_client.post.call_count == 1
+    assert mock_client.get.call_count == 2
+
+
+def test_wifi_networks_filter_posts_query_body(mock_client):
+    """filter() posts its kwargs to /wifiNetworks/query and never falls back to GET."""
+    mock_client.post.return_value = {"data": [{"id": "1"}]}
+
+    rows = WiFiNetworksResource(mock_client).filter(filters={"nwSubType": ["psk"]})
+
+    assert rows == [{"id": "1"}]
+    mock_client.post.assert_called_once_with(
+        "/wifiNetworks/query", json={"filters": {"nwSubType": ["psk"]}}
+    )
+    mock_client.get.assert_not_called()
+
+
+def test_wifi_networks_update(mock_client):
+    """update() puts the network to /wifiNetworks/{id}."""
+    mock_client.put.return_value = {"requestId": "req_1"}
+
+    result = WiFiNetworksResource(mock_client).update("net-1", {"name": "n"})
+
+    assert result == {"requestId": "req_1"}
+    mock_client.put.assert_called_once_with("/wifiNetworks/net-1", json={"name": "n"})
+
+
 def test_wifi_networks_delete(mock_client):
-    """Test deleting a network."""
+    """delete() calls DELETE /wifiNetworks/{id}; ``deep`` sends nothing."""
     mock_client.delete.return_value = {"requestId": "req_123"}
 
     resource = WiFiNetworksResource(mock_client)
     result = resource.delete("network_1", deep=True)
 
     assert result == {"requestId": "req_123"}
-    mock_client.delete.assert_called_once_with(
-        "/networks/network_1", params={"deep": "true"}
-    )
+    mock_client.delete.assert_called_once_with("/wifiNetworks/network_1")
 
 
 def test_wifi_networks_activate_at_venue(mock_client):
-    """Test activating network at venue."""
-    mock_client.post.return_value = {"requestId": "req_123"}
+    """activate_at_venue() PUTs the venue/network activation with an empty body."""
+    mock_client.put.return_value = {"requestId": "req_123"}
 
     resource = WiFiNetworksResource(mock_client)
     result = resource.activate_at_venue("venue_1", "network_1")
 
     assert result == {"requestId": "req_123"}
-    mock_client.post.assert_called_once_with(
-        "/networkActivations",
-        json={"venueId": "venue_1", "networkId": "network_1"},
+    mock_client.put.assert_called_once_with(
+        "/venues/venue_1/wifiNetworks/network_1", json={}
     )
+    mock_client.post.assert_not_called()
+
+
+def test_wifi_networks_activate_at_venue_empty_response(mock_client):
+    mock_client.put.return_value = None
+
+    with pytest.raises(ValueError, match="Failed to activate"):
+        WiFiNetworksResource(mock_client).activate_at_venue("v", "n")
 
 
 def test_wifi_networks_list_venue_networks(mock_client):
@@ -201,16 +311,14 @@ def test_wifi_networks_set_ap_group_scope_all(mock_client):
 
 
 def test_wifi_networks_deactivate_at_venue(mock_client):
-    """Test deactivating network at venue."""
+    """deactivate_at_venue() deletes the venue/network activation."""
     mock_client.delete.return_value = {"requestId": "req_123"}
 
     resource = WiFiNetworksResource(mock_client)
-    result = resource.deactivate_at_venue("activation_1")
+    result = resource.deactivate_at_venue("venue_1", "network_1")
 
     assert result == {"requestId": "req_123"}
-    mock_client.delete.assert_called_once_with(
-        "/networkActivations", json=["activation_1"]
-    )
+    mock_client.delete.assert_called_once_with("/venues/venue_1/wifiNetworks/network_1")
 
 
 def test_wifi_networks_create(mock_client):
@@ -227,7 +335,7 @@ def test_wifi_networks_create(mock_client):
 
     assert network["name"] == "Test Network"
     mock_client.post.assert_called_once_with(
-        "/networks",
+        "/wifiNetworks",
         json={
             "name": "Test Network",
             "type": "psk",
@@ -252,7 +360,7 @@ def test_wifi_networks_create_with_wlan_dict(mock_client):
 
     assert network["name"] == "Test Network"
     mock_client.post.assert_called_once_with(
-        "/networks",
+        "/wifiNetworks",
         json={
             "name": "Test Network",
             "type": "psk",
