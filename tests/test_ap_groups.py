@@ -14,10 +14,14 @@ def test_ap_groups_resource_initialization(mock_client):
     assert resource.client == mock_client
 
 
+QUERY_BODY = {"filters": {"venueId": ["venue_1"]}, "page": 1, "pageSize": 100}
+
+
 def test_ap_groups_list(mock_client):
-    """Test listing AP groups in a venue."""
-    mock_client.get.return_value = {
-        "data": [{"id": "1", "name": "Group 1"}],
+    """list() pages through POST /venues/apGroups/query filtered on the venue."""
+    mock_client.post.return_value = {
+        "data": [{"id": "1", "name": "Group 1", "venueId": "venue_1"}],
+        "totalCount": 1,
     }
 
     resource = APGroupsResource(mock_client)
@@ -25,7 +29,41 @@ def test_ap_groups_list(mock_client):
 
     assert len(groups) == 1
     assert groups[0]["name"] == "Group 1"
-    mock_client.get.assert_called_once_with("/venues/venue_1/apGroups")
+    mock_client.post.assert_called_once_with("/venues/apGroups/query", json=QUERY_BODY)
+    mock_client.get.assert_not_called()
+
+
+def test_ap_groups_list_follows_pages(mock_client):
+    mock_client.post.side_effect = [
+        {"data": [{"id": str(i), "venueId": "venue_1"} for i in range(100)]},
+        {"data": [{"id": "100", "venueId": "venue_1"}]},
+    ]
+
+    groups = APGroupsResource(mock_client).list("venue_1")
+
+    assert len(groups) == 101
+    assert mock_client.post.call_args_list[1].kwargs["json"]["page"] == 2
+
+
+def test_ap_groups_list_drops_other_venues(mock_client):
+    """Rows for another venue are dropped; rows without venueId are kept."""
+    mock_client.post.return_value = {
+        "data": [
+            {"id": "1", "venueId": "venue_1"},
+            {"id": "2", "venueId": "venue_2"},
+            {"id": "3"},
+        ]
+    }
+
+    groups = APGroupsResource(mock_client).list("venue_1")
+
+    assert [g["id"] for g in groups] == ["1", "3"]
+
+
+def test_ap_groups_list_empty(mock_client):
+    mock_client.post.return_value = None
+
+    assert APGroupsResource(mock_client).list("venue_1") == []
 
 
 def test_ap_groups_create(mock_client):
@@ -51,7 +89,7 @@ def test_ap_groups_create_missing_required_field(mock_client):
 
 def test_ap_groups_get_by_name(mock_client):
     """Test getting AP group by name using client-side filtering."""
-    mock_client.get.return_value = {
+    mock_client.post.return_value = {
         "data": [
             {"id": "1", "name": "Test Group", "venueId": "venue_1"},
             {"id": "2", "name": "Other Group", "venueId": "venue_1"},
@@ -63,12 +101,13 @@ def test_ap_groups_get_by_name(mock_client):
 
     assert group["name"] == "Test Group"
     assert group["id"] == "1"
-    mock_client.get.assert_called_once_with("/venues/venue_1/apGroups")
+    mock_client.post.assert_called_once_with("/venues/apGroups/query", json=QUERY_BODY)
+    mock_client.get.assert_not_called()
 
 
 def test_ap_groups_get_by_name_not_found(mock_client):
     """Test getting AP group by name when not found."""
-    mock_client.get.return_value = {
+    mock_client.post.return_value = {
         "data": [{"id": "1", "name": "Other Group", "venueId": "venue_1"}]
     }
 
@@ -82,7 +121,7 @@ def test_ap_groups_get_by_name_not_found(mock_client):
 
 def test_ap_groups_get_by_name_not_found_empty_list(mock_client):
     """Test getting AP group by name when list is empty."""
-    mock_client.get.return_value = {"data": []}
+    mock_client.post.return_value = {"data": []}
 
     resource = APGroupsResource(mock_client)
 
@@ -94,7 +133,7 @@ def test_ap_groups_get_by_name_not_found_empty_list(mock_client):
 
 def test_ap_groups_get_by_name_multiple_found(mock_client):
     """Test getting AP group by name when multiple groups found."""
-    mock_client.get.return_value = {
+    mock_client.post.return_value = {
         "data": [
             {"id": "1", "name": "Test Group", "venueId": "venue_1"},
             {"id": "2", "name": "Test Group", "venueId": "venue_1"},
@@ -106,6 +145,22 @@ def test_ap_groups_get_by_name_multiple_found(mock_client):
 
     with pytest.raises(ValueError, match="Multiple AP groups found"):
         resource.get_by_name("venue_1", "Test Group")
+
+
+def test_ap_groups_get_by_name_uses_cache(mock_client):
+    """A cached name reads the group by id with GET /venues/{venueId}/apGroups/{id}."""
+    mock_client.post.return_value = {
+        "data": [{"id": "1", "name": "Test Group", "venueId": "venue_1"}]
+    }
+    mock_client.get.return_value = {"id": "1", "name": "Test Group"}
+    resource = APGroupsResource(mock_client)
+
+    resource.get_by_name("venue_1", "Test Group")
+    group = resource.get_by_name("venue_1", "Test Group")
+
+    assert group["id"] == "1"
+    assert mock_client.post.call_count == 1
+    mock_client.get.assert_called_once_with("/venues/venue_1/apGroups/1")
 
 
 def test_ap_groups_update(mock_client):

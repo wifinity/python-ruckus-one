@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional, Union, cast
 
 from ruckus_one.exceptions import RuckusOneNotFoundError
-from ruckus_one.resources.base import BaseResource
+from ruckus_one.resources.base import BaseResource, query_all
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +19,67 @@ class WiFiNetworksResource(BaseResource):
 
     def __init__(self, client: Any) -> None:
         """Initialize Wi-Fi networks resource."""
-        path = "/networks"
+        path = "/wifiNetworks"
         super().__init__(client, path)
+
+    def all(self) -> List[Dict[str, Any]]:
+        """Get all Wi-Fi networks by paging through POST /wifiNetworks/query.
+
+        Rows are the query view of each network (``id``, ``name``, ``nwSubType``,
+        ``ssid``, venue and AP counts, ...), not the full network object that
+        ``get(id=...)`` returns.
+
+        Returns:
+            List of all networks across all pages
+        """
+        return query_all(self.client, f"{self.path}/query", {})
+
+    def get(
+        self, id: Optional[Union[int, str]] = None, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """Get a single Wi-Fi network by ID or by filter parameters.
+
+        A lookup by ``name`` alone resolves the ID with a ``filters.name`` query
+        (matched case-insensitively on the client), then fetches the full network
+        by ID, so the result has the same shape as a lookup by ID. Any other
+        filter falls back to client-side filtering over ``all()``.
+
+        Args:
+            id: Network ID (optional if using filter parameters)
+            **kwargs: Filter parameters to search by (e.g., name="Network Name")
+
+        Returns:
+            Network data
+
+        Raises:
+            RuckusOneNotFoundError: If no network matches
+            ValueError: If multiple networks match or parameters are invalid
+        """
+        if id is not None or set(kwargs) != {"name"}:
+            return super().get(id, **kwargs)
+
+        name = kwargs["name"]
+        rows = query_all(
+            self.client,
+            f"{self.path}/query",
+            {"fields": ["id", "name"], "filters": {"name": [name]}},
+        )
+        matches = [
+            row
+            for row in rows
+            if isinstance(row.get("name"), str) and row["name"].lower() == name.lower()
+        ]
+
+        if not matches:
+            raise RuckusOneNotFoundError(f"Wi-Fi network with name '{name}' not found")
+        if len(matches) > 1:
+            raise ValueError(f"Multiple Wi-Fi networks found with name '{name}'")
+
+        network_id = matches[0].get("id")
+        if not network_id:
+            raise ValueError(f"Wi-Fi network query result for '{name}' has no id")
+
+        return super().get(id=network_id)
 
     def get_by_name(self, name: str, use_cache: bool = True) -> Dict[str, Any]:
         """Get Wi-Fi network by name, with optional caching.
@@ -41,24 +100,20 @@ class WiFiNetworksResource(BaseResource):
     def filter(self, **kwargs: Any) -> List[Dict[str, Any]]:
         """Get filtered list of Wi-Fi networks.
 
+        Posts ``kwargs`` as the body of POST /wifiNetworks/query (``filters``,
+        ``fields``, ``searchString``, ``page``, ``pageSize``, ...) and returns
+        one page of query rows.
+
         Args:
-            **kwargs: Filter parameters
+            **kwargs: Query body
 
         Returns:
-            List of filtered networks
+            List of matching networks
         """
-        # Try POST /query endpoint first (Ruckus One pattern)
-        query_path = f"{self.path}/query"
-        try:
-            response = self.client.post(query_path, json=kwargs)
-        except RuckusOneNotFoundError:
-            # Fall back to GET with params
-            response = self.client.get(self.path, params=kwargs)
-
+        response = self.client.post(f"{self.path}/query", json=kwargs)
         if not response:
             return []
 
-        # Handle both dict-with-data and bare list responses
         if isinstance(response, list):
             return cast(List[Dict[str, Any]], response)
 
@@ -68,20 +123,17 @@ class WiFiNetworksResource(BaseResource):
     def delete(
         self, id: Union[int, str], deep: bool = True
     ) -> Optional[Dict[str, Any]]:
-        """Delete a network.
-
-        Per Postman collection, DELETE /networks/{id}?deep=true.
+        """Delete a network with DELETE /wifiNetworks/{id}.
 
         Args:
             id: Network ID
-            deep: Whether to perform deep delete (default: True)
+            deep: Accepted for signature compatibility and ignored: the endpoint
+                takes no options.
 
         Returns:
             Response data (may include requestId for async operations)
         """
-        path = f"{self.path}/{id}"
-        params = {"deep": "true"} if deep else {}
-        return cast(Optional[Dict[str, Any]], self.client.delete(path, params=params))
+        return cast(Optional[Dict[str, Any]], self.client.delete(f"{self.path}/{id}"))
 
     _ACTIVATION_QUERY_PAGE_SIZE = 100
 
@@ -93,10 +145,10 @@ class WiFiNetworksResource(BaseResource):
     ) -> List[Dict[str, Any]]:
         """List networks activated at a venue.
 
-        Uses POST /networkActivations/query, filtered on the venue and optionally the
-        network, and follows every page. The endpoint reads its filter only from
-        ``filters`` (a list of match objects); top-level ``venueId``/``networkId`` keys
-        are ignored and return every activation in the tenant.
+        Uses POST /networkActivations/query with top-level ``venueId`` and
+        optional ``networkId`` keys and follows every page. The endpoint ignores
+        a ``filters`` key. Rows naming a different venue or network are dropped,
+        so an ignored filter cannot return another venue's activations.
 
         Args:
             venue_id: Venue ID
@@ -109,61 +161,44 @@ class WiFiNetworksResource(BaseResource):
         Returns:
             List of network activations for the venue
         """
-        path = "/networkActivations/query"
-        match: Dict[str, Any] = {"venueId": str(venue_id)}
+        match: Dict[str, str] = {"venueId": str(venue_id)}
         if network_id is not None:
             match["networkId"] = str(network_id)
-        page_size = self._ACTIVATION_QUERY_PAGE_SIZE
+        body: Dict[str, Any] = dict(match)
+        if fields is not None:
+            body["fields"] = list(fields)
 
-        activations: List[Dict[str, Any]] = []
-        page = 1
-        while True:
-            body: Dict[str, Any] = {
-                "filters": [match],
-                "page": page,
-                "pageSize": page_size,
-            }
-            if fields is not None:
-                body["fields"] = list(fields)
-            response = self.client.post(path, json=body)
-            if not response:
-                break
-            if isinstance(response, list):
-                activations.extend(cast(List[Dict[str, Any]], response))
-                break
-
-            items = cast(List[Dict[str, Any]], response.get("data") or [])
-            activations.extend(items)
-            total = response.get("totalCount")
-            if len(items) < page_size:
-                break
-            if isinstance(total, int) and len(activations) >= total:
-                break
-            page += 1
-
-        return activations
+        rows = query_all(
+            self.client,
+            "/networkActivations/query",
+            body,
+            page_size=self._ACTIVATION_QUERY_PAGE_SIZE,
+        )
+        return [
+            row
+            for row in rows
+            if all(str(row.get(key, value)) == value for key, value in match.items())
+        ]
 
     def activate_at_venue(
         self, venue_id: Union[int, str], network_id: Union[int, str]
     ) -> Dict[str, Any]:
         """Activate Wi-Fi network at a venue.
 
-        Per Postman collection, POST /networkActivations with body containing
-        venueId and networkId.
+        Uses PUT /venues/{venueId}/wifiNetworks/{wifiNetworkId} with an empty
+        body, so a new activation broadcasts from all AP groups
+        (``isAllApGroups`` defaults to True). The PUT is idempotent: calling it
+        for a network already active at the venue does not fail.
 
         Args:
             venue_id: Venue ID
             network_id: Wi-Fi network ID
 
         Returns:
-            Activation result (may include requestId for async operations)
+            Activation result (``requestId`` for async completion)
         """
-        path = "/networkActivations"
-        body = {
-            "venueId": str(venue_id),
-            "networkId": str(network_id),
-        }
-        response = self.client.post(path, json=body)
+        path = f"/venues/{venue_id}/wifiNetworks/{network_id}"
+        response = self.client.put(path, json={})
         if not response:
             raise ValueError(
                 f"Failed to activate network {network_id} at venue {venue_id}"
@@ -171,33 +206,21 @@ class WiFiNetworksResource(BaseResource):
         return cast(Dict[str, Any], response)
 
     def deactivate_at_venue(
-        self, network_venue_id: Union[int, str, List[Union[int, str]]]
+        self, venue_id: Union[int, str], network_id: Union[int, str]
     ) -> Optional[Dict[str, Any]]:
-        """Deactivate network at venue.
+        """Deactivate a Wi-Fi network at a venue.
 
-        Per Postman collection, DELETE /networkActivations with JSON array body.
+        Uses DELETE /venues/{venueId}/wifiNetworks/{wifiNetworkId}.
 
         Args:
-            network_venue_id: Single network-venue association ID or list of IDs
+            venue_id: Venue ID
+            network_id: Wi-Fi network ID
 
         Returns:
-            Response data (may include requestId for async operations)
+            Response data (``requestId`` for async completion)
         """
-        # Normalize to list
-        if isinstance(network_venue_id, (int, str)):
-            ids = [network_venue_id]
-        elif isinstance(network_venue_id, list):
-            ids = network_venue_id
-        else:
-            raise ValueError(
-                f"network_venue_id must be int, str, or list, got {type(network_venue_id).__name__}"
-            )
-
-        # Convert to strings
-        ids_str = [str(id_val) for id_val in ids]
-
-        path = "/networkActivations"
-        return cast(Optional[Dict[str, Any]], self.client.delete(path, json=ids_str))
+        path = f"/venues/{venue_id}/wifiNetworks/{network_id}"
+        return cast(Optional[Dict[str, Any]], self.client.delete(path))
 
     def _validate_network_type(self, network_type: str) -> None:
         """Validate network type.

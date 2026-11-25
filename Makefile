@@ -1,5 +1,5 @@
 # vim:ft=make:noexpandtab:
-.PHONY: format format-check lint type-check unit-tests tests help
+.PHONY: format format-check lint type-check unit-tests tests api-drift help
 .DEFAULT_GOAL := help
 
 format: ## Run black formatter
@@ -11,7 +11,7 @@ format-check: ## Check black formatting
 
 lint: format-check ## Run linter
 	@echo "Running flake8"
-	uv run flake8 ruckus_one/ --format=github
+	uv run flake8 ruckus_one/ scripts/ --format=github
 
 type-check: ## Run type checks
 	@echo "Running mypy"
@@ -20,6 +20,9 @@ type-check: ## Run type checks
 unit-tests: ## Run unit tests
 	@echo "Running pytest"
 	uv run pytest -v -s tests/
+
+api-drift: ## Compare the SDK endpoint inventory with the published Ruckus One specs (ARGS="--json")
+	@uv run python scripts/check_api_drift.py $(ARGS)
 
 tests: lint type-check unit-tests ## Run all tests
 test: tests

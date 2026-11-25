@@ -15,7 +15,7 @@ A Python client library for the Ruckus One API.
 - **Async Operations**: Support for asynchronous API operations with polling
 - **Multi-Region Support**: Support for US, EU, and Asia regions
 - **Logging**: Configurable logging throughout the client
-- **Python 3.8+**: Modern Python features and type hints
+- **Python 3.12+**: Modern Python features and type hints
 
 ## Installation
 
@@ -282,8 +282,11 @@ result = client.wifi_networks.activate_at_venue(
     network_id="network_123"
 )
 
-# Deactivate network at venue (using network-venue association ID)
-client.wifi_networks.deactivate_at_venue("network_venue_association_id")
+# Deactivate network at venue
+client.wifi_networks.deactivate_at_venue(
+    venue_id="venue_123",
+    network_id="network_123"
+)
 ```
 
 #### AP Groups
@@ -646,10 +649,7 @@ result = client.wifi_networks.activate_at_venue(
 venue_networks = client.wifi_networks.list_venue_networks(venue_id=venue["id"])
 
 # Deactivate network at venue
-# Note: Use the association ID from list_venue_networks or activate_at_venue response
-association_id = result.get("id")
-if association_id:
-    client.wifi_networks.deactivate_at_venue(association_id)
+client.wifi_networks.deactivate_at_venue(venue_id=venue["id"], network_id=network["id"])
 ```
 
 ### Working with AP Groups

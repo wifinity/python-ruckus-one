@@ -4,6 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional, Union, cast
 
 from ruckus_one.exceptions import RuckusOneAPIError, RuckusOneNotFoundError
+from ruckus_one.resources.base import as_filter_values, query_all
 
 logger = logging.getLogger(__name__)
 
@@ -20,23 +21,53 @@ class APsResource:
         self.client = client
         logger.debug("Initialized APsResource")
 
-    def _get_path(self) -> str:
-        """Get base path for AP operations.
+    _QUERY_PATH = "/venues/aps/query"
+    _LOOKUP_FIELDS = ["serialNumber", "name", "venueId", "apGroupId", "model"]
+    _SECRET_FIELDS = frozenset({"loginPassword"})
+    _CONFIG_FIELDS = ("name", "description", "tags", "model", "deviceGps")
+    _AP_GROUP_QUERY_PATH = "/venues/apGroups/query"
+    _MOVE_TIMEOUT_SECONDS = 60.0
+    _MOVE_POLL_INTERVAL_SECONDS = 2.0
 
-        Returns:
-            Base path for AP operations (/venues/aps per Postman)
+    def _venue_ap_path(self, venue_id: Union[int, str], serial_number: str) -> str:
+        return f"/venues/{venue_id}/aps/{serial_number}"
+
+    def _find(self, serial_numbers: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Query rows for the given serials, keyed by serial number.
+
+        Uses POST /venues/aps/query, which searches every venue in the tenant.
         """
-        return "/venues/aps"
+        rows = query_all(
+            self.client,
+            self._QUERY_PATH,
+            {
+                "fields": self._LOOKUP_FIELDS,
+                "filters": {"serialNumber": list(serial_numbers)},
+            },
+        )
+        wanted = set(serial_numbers)
+        return {
+            row["serialNumber"]: row
+            for row in rows
+            if row.get("serialNumber") in wanted
+        }
 
     def get_by_serial(
         self, venue_id: Union[int, str], serial_number: str
     ) -> Dict[str, Any]:
-        """Get AP by serial number using direct lookup.
+        """Get AP by serial number, in whichever venue it is registered.
 
-        This uses the /venues/aps/{serialNumber} endpoint exposed by the API.
+        Finds the AP's venue with POST /venues/aps/query, then reads its
+        configuration with GET /venues/{venueId}/aps/{serialNumber}. The result
+        merges both: the query row (``serialNumber``, ``name``, ``venueId``,
+        ``apGroupId``, ``model``) overlaid with the configuration (``name``,
+        ``description``, ``tags``, ``model``, ``deviceGps``). ``venueId`` is the
+        venue the AP is in, which can differ from ``venue_id``. The AP's
+        ``loginPassword``, which the configuration carries in plain text, is
+        left out.
 
         Args:
-            venue_id: Venue ID (retained for backwards compatibility; not used)
+            venue_id: Venue ID used when the query row carries no ``venueId``
             serial_number: AP serial number
 
         Returns:
@@ -45,55 +76,64 @@ class APsResource:
         Raises:
             RuckusOneNotFoundError: If AP not found
         """
-        path = f"{self._get_path()}/{serial_number}"
-        response = self.client.get(path)
-        if not response:
+        row = self._find([serial_number]).get(serial_number)
+        if row is None:
             raise RuckusOneNotFoundError(f"AP with serial {serial_number} not found")
-        return cast(Dict[str, Any], response)
+
+        ap_venue_id = str(row.get("venueId") or venue_id)
+        detail = self.client.get(self._venue_ap_path(ap_venue_id, serial_number))
+        if not detail:
+            raise RuckusOneNotFoundError(f"AP with serial {serial_number} not found")
+
+        config = {
+            key: value
+            for key, value in cast(Dict[str, Any], detail).items()
+            if key not in self._SECRET_FIELDS
+        }
+        return {
+            **row,
+            **config,
+            "serialNumber": serial_number,
+            "venueId": ap_venue_id,
+        }
 
     def list(
         self, venue_id: Optional[Union[int, str]] = None, **filters: Any
     ) -> List[Dict[str, Any]]:
         """List APs, optionally filtered by venue.
 
+        Pages through POST /venues/aps/query. Each keyword filter becomes a
+        ``filters`` entry (a scalar is wrapped in a list), e.g.
+        ``serialNumber="123"`` → ``{"serialNumber": ["123"]}``.
+
         Args:
             venue_id: Optional venue ID for filtering
-            **filters: Optional filter parameters (e.g., serialNumber)
+            **filters: Optional filter fields (e.g., serialNumber, apGroupId)
 
         Returns:
-            List of APs
+            List of AP query rows
         """
-        path = self._get_path()
-        params = filters.copy() if filters else {}
+        query_filters = {key: as_filter_values(value) for key, value in filters.items()}
         if venue_id:
-            params["venueId"] = str(venue_id)
-        response = self.client.get(path, params=params if params else None)
-        if not response:
-            return []
-
-        # Handle both dict-with-data and bare list responses
-        if isinstance(response, list):
-            return cast(List[Dict[str, Any]], response)
-
-        data = response.get("data", [])
-        return cast(List[Dict[str, Any]], data)
+            query_filters["venueId"] = [str(venue_id)]
+        body: Dict[str, Any] = {"filters": query_filters} if query_filters else {}
+        return query_all(self.client, self._QUERY_PATH, body)
 
     def create(self, venue_id: Union[int, str], **kwargs: Any) -> Dict[str, Any]:
         """Create/add an AP to a venue.
 
-        Per Postman collection, POST /venues/aps expects an array of AP objects.
+        Uses POST /venues/{venueId}/aps with a single AP object.
 
         Args:
-            venue_id: Venue ID (will be added to AP data)
+            venue_id: Venue ID
             **kwargs: AP data to create (name, serialNumber, description, tags, etc.)
 
         Returns:
-            Created AP data (may include requestId for async operations)
+            Create response: ``requestId`` and ``response.id``
 
         Raises:
             ValueError: If required fields are missing
         """
-        # Validate required fields before creating the data dict
         required_fields = ["serialNumber", "name"]
         missing = []
         for field in required_fields:
@@ -106,13 +146,8 @@ class APsResource:
                 f"Missing required fields for create: {', '.join(missing)}"
             )
 
-        # Ensure venueId is in the data
-        ap_data = kwargs.copy()
-        ap_data["venueId"] = str(venue_id)
-
-        # POST /venues/aps expects array per Postman
-        path = self._get_path()
-        response = self.client.post(path, json=[ap_data])
+        ap_data = {k: v for k, v in kwargs.items() if k != "venueId"}
+        response = self.client.post(f"/venues/{venue_id}/aps", json=ap_data)
         if not response:
             raise ValueError("Failed to create AP")
         return cast(Dict[str, Any], response)
@@ -123,50 +158,89 @@ class APsResource:
         serial_number: str,
         data: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Update an existing AP.
+        """Update an AP's configuration, moving it into ``venue_id`` first if needed.
 
-        Note: Update endpoint may vary. This attempts PUT /venues/aps/{serialNumber}.
-        The API requires venueId and serialNumber in the request body.
+        POST /venues/aps/query finds the AP's current venue. When that differs
+        from ``venue_id``, or ``data`` names a different ``apGroupId``, the AP is
+        moved with PUT /venues/{venueId}/apGroups/{apGroupId}/aps/{serialNumber}
+        into ``data["apGroupId"]`` or, without one, the default AP group of
+        ``venue_id``, and the move is awaited. The configuration (``name``,
+        ``description``, ``tags``, ``model``, ``deviceGps``; any other key in
+        ``data`` is dropped) is then written with
+        PUT /venues/{venueId}/aps/{serialNumber}. ``name`` is required by the
+        endpoint and taken from the AP when ``data`` has none.
 
         Args:
-            venue_id: Venue ID (for reference)
+            venue_id: Venue the AP belongs in
             serial_number: AP serial number
-            data: Data to update
+            data: Fields to update
 
         Returns:
-            Updated AP data (may include requestId for async operations)
-        """
-        # Ensure body includes venueId and serialNumber (API requires them)
-        payload = {**data, "venueId": str(venue_id), "serialNumber": serial_number}
-        path = f"{self._get_path()}/{serial_number}"
-        try:
-            response = self.client.put(path, json=payload)
-            if response:
-                return cast(Dict[str, Any], response)
-        except RuckusOneNotFoundError:
-            # Fall back to PATCH if PUT doesn't work
-            logger.debug(f"PUT not available, trying PATCH for AP {serial_number}")
-            # Note: httpx doesn't have PATCH directly, but we can use request method
-            # For now, just raise the error
-            pass
+            Response of the configuration PUT (``requestId``)
 
-        raise ValueError(f"Failed to update AP with serial {serial_number}")
+        Raises:
+            RuckusOneNotFoundError: If the AP, or a default AP group for a move,
+                is not found
+            ValueError: If the configuration PUT returns no response
+        """
+        current = self._find([serial_number]).get(serial_number)
+        if current is None:
+            raise RuckusOneNotFoundError(f"AP with serial {serial_number} not found")
+
+        target_venue = str(venue_id)
+        target_group = data.get("apGroupId")
+        in_venue = str(current.get("venueId") or target_venue) == target_venue
+        if not in_venue or (target_group and target_group != current.get("apGroupId")):
+            group_id = target_group or self._default_ap_group_id(target_venue)
+            moved = self.client.put(
+                f"/venues/{target_venue}/apGroups/{group_id}/aps/{serial_number}",
+                json={},
+            )
+            request_id = (moved or {}).get("requestId")
+            if request_id:
+                self.client.activities.wait_for_completion(
+                    request_id,
+                    timeout=self._MOVE_TIMEOUT_SECONDS,
+                    poll_interval=self._MOVE_POLL_INTERVAL_SECONDS,
+                )
+
+        config = {k: v for k, v in data.items() if k in self._CONFIG_FIELDS}
+        config.setdefault("name", current.get("name"))
+        response = self.client.put(
+            self._venue_ap_path(target_venue, serial_number), json=config
+        )
+        if not response:
+            raise ValueError(f"Failed to update AP with serial {serial_number}")
+        return cast(Dict[str, Any], response)
+
+    def _default_ap_group_id(self, venue_id: str) -> str:
+        rows = query_all(
+            self.client,
+            self._AP_GROUP_QUERY_PATH,
+            {"filters": {"venueId": [venue_id]}},
+        )
+        for row in rows:
+            if row.get("isDefault") and str(row.get("venueId", venue_id)) == venue_id:
+                return str(row["id"])
+        raise RuckusOneNotFoundError(f"No default AP group found in venue {venue_id}")
 
     def delete(
         self, venue_id: Union[int, str], serial_number: Union[str, List[str]]
     ) -> Optional[Dict[str, Any]]:
         """Delete one or more APs.
 
-        Per Postman collection, DELETE /venues/aps expects JSON array of serial numbers.
+        Each AP is deleted with DELETE /venues/{venueId}/aps/{serialNumber} in
+        the venue POST /venues/aps/query reports for it; ``venue_id`` is used
+        for a serial the query does not find.
 
         Args:
-            venue_id: Venue ID (for reference, not used in API call)
+            venue_id: Venue ID used for serials the query does not find
             serial_number: Single serial number or list of serial numbers
 
         Returns:
-            Response data (may include requestId for async operations)
+            The delete response (``requestId``) for a single serial number, or
+            ``{"responses": [...]}`` with one response per serial for a list.
         """
-        # Normalize to list
         if isinstance(serial_number, str):
             serial_numbers = [serial_number]
         elif isinstance(serial_number, list):
@@ -175,12 +249,20 @@ class APsResource:
             raise ValueError(
                 f"serial_number must be str or list of str, got {type(serial_number).__name__}"
             )
+        if not serial_numbers:
+            return {"responses": []}
 
-        # DELETE /venues/aps with JSON array body per Postman
-        path = self._get_path()
-        return cast(
-            Optional[Dict[str, Any]], self.client.delete(path, json=serial_numbers)
-        )
+        found = self._find(serial_numbers)
+        responses = []
+        for serial in serial_numbers:
+            ap_venue_id = (found.get(serial) or {}).get("venueId") or venue_id
+            responses.append(
+                self.client.delete(self._venue_ap_path(ap_venue_id, serial))
+            )
+
+        if isinstance(serial_number, str):
+            return cast(Optional[Dict[str, Any]], responses[0])
+        return {"responses": responses}
 
     def move(
         self,
@@ -190,8 +272,8 @@ class APsResource:
     ) -> Dict[str, Any]:
         """Move an AP to a different venue.
 
-        Note: Postman collection doesn't show a direct move endpoint.
-        This implementation uses delete + create as fallback.
+        Reads the AP, deletes it from its current venue and creates it in the
+        target venue with its name, serial number, description and tags.
 
         Args:
             venue_id: Source venue ID

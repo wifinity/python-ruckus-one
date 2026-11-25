@@ -4,6 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional, Union, cast
 
 from ruckus_one.exceptions import RuckusOneNotFoundError
+from ruckus_one.resources.base import query_all
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +25,10 @@ class APGroupsResource:
         self._name_cache: Dict[str, Dict[str, str]] = {}
         logger.debug("Initialized APGroupsResource")
 
+    _QUERY_PATH = "/venues/apGroups/query"
+
     def _get_path(self, venue_id: Union[int, str]) -> str:
         """Get base path for AP group operations in a venue.
-
-        Note: This path is based on assumptions as AP groups are not explicitly
-        documented in the Postman collection.
 
         Args:
             venue_id: Venue ID
@@ -41,23 +41,23 @@ class APGroupsResource:
     def list(self, venue_id: Union[int, str]) -> List[Dict[str, Any]]:
         """List AP groups in a venue.
 
+        Pages through POST /venues/apGroups/query filtered on the venue. Rows
+        carry ``id``, ``name``, ``description``, ``venueId``, ``isDefault``,
+        ``apSerialNumbers``, ``wifiNetworkIds`` and ``clientCount``. Rows for
+        another venue are dropped, so an ignored filter cannot leak groups from
+        elsewhere in the tenant.
+
         Args:
             venue_id: Venue ID
 
         Returns:
             List of AP groups
         """
-        path = self._get_path(venue_id)
-        response = self.client.get(path)
-        if not response:
-            return []
-
-        # Handle both dict-with-data and bare list responses
-        if isinstance(response, list):
-            return cast(List[Dict[str, Any]], response)
-
-        data = response.get("data", [])
-        return cast(List[Dict[str, Any]], data)
+        venue_key = str(venue_id)
+        rows = query_all(
+            self.client, self._QUERY_PATH, {"filters": {"venueId": [venue_key]}}
+        )
+        return [row for row in rows if str(row.get("venueId", venue_key)) == venue_key]
 
     def get(self, venue_id: Union[int, str], id: Union[int, str]) -> Dict[str, Any]:
         """Get AP group by ID.

@@ -7,6 +7,57 @@ from ruckus_one.exceptions import RuckusOneNotFoundError
 
 logger = logging.getLogger(__name__)
 
+QUERY_PAGE_SIZE = 100
+
+
+def query_all(
+    client: Any,
+    path: str,
+    body: Dict[str, Any],
+    page_size: int = QUERY_PAGE_SIZE,
+) -> List[Dict[str, Any]]:
+    """POST a query body to a Ruckus One ``.../query`` endpoint and follow every page.
+
+    ``page`` and ``pageSize`` are set on each request. Paging stops on a short
+    page or once ``totalCount`` rows have been read. A bare list response is
+    taken as the complete result.
+
+    Args:
+        client: RuckusOneClient instance
+        path: Query endpoint path, e.g. ``/wifiNetworks/query``
+        body: Query body (``filters``, ``fields``, ``searchString``, ...)
+        page_size: Rows requested per page
+
+    Returns:
+        Every row across all pages
+    """
+    rows: List[Dict[str, Any]] = []
+    page = 1
+    while True:
+        response = client.post(path, json={**body, "page": page, "pageSize": page_size})
+        if isinstance(response, list):
+            rows.extend(cast(List[Dict[str, Any]], response))
+            break
+        if not isinstance(response, dict):
+            break
+
+        items = cast(List[Dict[str, Any]], response.get("data") or [])
+        rows.extend(items)
+        total = response.get("totalCount")
+        if len(items) < page_size:
+            break
+        if isinstance(total, int) and len(rows) >= total:
+            break
+        page += 1
+    return rows
+
+
+def as_filter_values(value: Any) -> List[str]:
+    """Shape a filter value as the list of strings query ``filters`` expect."""
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value]
+    return [str(value)]
+
 
 class BaseResource:
     """Base class for API resources providing common CRUD operations."""

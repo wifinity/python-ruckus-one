@@ -119,22 +119,17 @@ class VenuesResource(BaseResource):
     def filter(self, **kwargs: Any) -> List[Dict[str, Any]]:
         """Get filtered list of venues.
 
-        Supports POST /venues/query for filtering.
+        Posts ``kwargs`` as the body of POST /venues/query (``filters``,
+        ``fields``, ``searchString``, ``page``, ``pageSize``, ...) and returns
+        one page of query rows.
 
         Args:
-            **kwargs: Filter parameters
+            **kwargs: Query body
 
         Returns:
             List of filtered venues
         """
-        # Try POST /query endpoint first (Ruckus One pattern)
-        query_path = f"{self.path}/query"
-        try:
-            response = self.client.post(query_path, json=kwargs)
-        except RuckusOneNotFoundError:
-            # Fall back to GET with params
-            response = self.client.get(self.path, params=kwargs)
-
+        response = self.client.post(f"{self.path}/query", json=kwargs)
         if not response:
             return []
 
@@ -243,27 +238,25 @@ class VenuesResource(BaseResource):
     ) -> Optional[Dict[str, Any]]:
         """Delete one or more venues.
 
-        Per Postman collection, delete uses DELETE /venues with JSON array body.
+        Each venue is deleted with DELETE /venues/{venueId}.
 
         Args:
             id: Single venue ID or list of venue IDs
 
         Returns:
-            Response data (may include requestId for async operations)
+            The delete response (``requestId``) for a single ID, or
+            ``{"responses": [...]}`` with one response per venue for a list.
         """
-        # Normalize to list
         if isinstance(id, (int, str)):
-            venue_ids = [id]
-        elif isinstance(id, list):
-            venue_ids = id
-        else:
+            return cast(
+                Optional[Dict[str, Any]], self.client.delete(f"{self.path}/{id}")
+            )
+        if not isinstance(id, list):
             raise ValueError(
                 f"id must be int, str, or list of int/str, got {type(id).__name__}"
             )
-
-        # Convert all IDs to strings (Postman shows string IDs)
-        venue_ids_str = [str(venue_id) for venue_id in venue_ids]
-
-        # DELETE /venues with JSON array body per Postman
-        response = self.client.delete(self.path, json=venue_ids_str)
-        return cast(Optional[Dict[str, Any]], response)
+        return {
+            "responses": [
+                self.client.delete(f"{self.path}/{venue_id}") for venue_id in id
+            ]
+        }

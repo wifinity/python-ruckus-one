@@ -1,6 +1,6 @@
 """Tests for venues resource."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 import pytest
 
@@ -365,39 +365,43 @@ def test_venues_filter(mock_client):
 
 
 def test_venues_delete(mock_client):
-    """Test deleting a venue."""
+    """delete() calls DELETE /venues/{venueId}."""
     mock_client.delete.return_value = {"requestId": "req_123"}
 
     resource = VenuesResource(mock_client)
     result = resource.delete("venue_1")
 
     assert result == {"requestId": "req_123"}
-    mock_client.delete.assert_called_once_with("/venues", json=["venue_1"])
+    mock_client.delete.assert_called_once_with("/venues/venue_1")
 
 
 def test_venues_delete_multiple(mock_client):
-    """Test deleting multiple venues."""
-    mock_client.delete.return_value = {"requestId": "req_123"}
+    """A list deletes each venue and returns one response per venue."""
+    mock_client.delete.side_effect = [{"requestId": "r1"}, {"requestId": "r2"}]
 
     resource = VenuesResource(mock_client)
     result = resource.delete(["venue_1", "venue_2"])
 
-    assert result == {"requestId": "req_123"}
-    mock_client.delete.assert_called_once_with("/venues", json=["venue_1", "venue_2"])
+    assert result == {"responses": [{"requestId": "r1"}, {"requestId": "r2"}]}
+    assert mock_client.delete.call_args_list == [
+        call("/venues/venue_1"),
+        call("/venues/venue_2"),
+    ]
 
 
-def test_venues_filter_with_query_fallback(mock_client):
-    """Test filter method with POST /query fallback to GET."""
+def test_venues_delete_invalid_type(mock_client):
+    with pytest.raises(ValueError, match="id must be"):
+        VenuesResource(mock_client).delete(1.5)  # type: ignore[arg-type]
+
+
+def test_venues_filter_does_not_fall_back_to_get(mock_client):
+    """filter() posts to /venues/query only; a 404 propagates."""
     resource = VenuesResource(mock_client)
-
-    # Test when POST /query raises NotFoundError, falls back to GET
     mock_client.post.side_effect = RuckusOneNotFoundError("Not found")
-    mock_client.get.return_value = {"data": [{"id": "1", "name": "Venue 1"}]}
 
-    result = resource.filter(name="Venue 1")
-    assert result == [{"id": "1", "name": "Venue 1"}]
-    mock_client.post.assert_called_once_with("/venues/query", json={"name": "Venue 1"})
-    mock_client.get.assert_called_once_with("/venues", params={"name": "Venue 1"})
+    with pytest.raises(RuckusOneNotFoundError):
+        resource.filter(name="Venue 1")
+    mock_client.get.assert_not_called()
 
 
 def test_venues_filter_with_list_response(mock_client):
