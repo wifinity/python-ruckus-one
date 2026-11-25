@@ -84,9 +84,12 @@ ENDPOINTS: Tuple[Endpoint, ...] = (
     ),
     # APs
     Endpoint("POST", "/venues/aps/query", "1", "1"),
-    Endpoint("PUT", "/venues/aps/{serialNumber}"),
     Endpoint("POST", "/venues/{venueId}/aps", "1", "1"),
     Endpoint("GET", "/venues/{venueId}/aps/{serialNumber}", None, "1"),
+    Endpoint("PUT", "/venues/{venueId}/aps/{serialNumber}", "1", "1"),
+    Endpoint(
+        "PUT", "/venues/{venueId}/apGroups/{apGroupId}/aps/{serialNumber}", None, "1"
+    ),
     Endpoint("DELETE", "/venues/{venueId}/aps/{serialNumber}", None, "1"),
     Endpoint("PATCH", "/venues/{venueId}/aps/{serialNumber}/neighbors", "1", "1"),
     Endpoint("POST", "/venues/{venueId}/aps/{serialNumber}/neighbors/query", "1", "1"),

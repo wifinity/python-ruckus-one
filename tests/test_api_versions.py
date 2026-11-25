@@ -114,10 +114,10 @@ class TestClientPinning:
         assert sent[0].headers["Accept"] == "application/vnd.ruckus.v1+json"
         assert "Content-Type" not in sent[0].headers
 
-    def test_unversioned_endpoint_keeps_default_headers(self):
+    def test_unversioned_request_keeps_default_content_type(self):
         client, sent = make_client([httpx.Response(200, json={})])
-        client.put("/venues/aps/SN1", json={"name": "n"})
-        assert "vnd.ruckus" not in sent[0].headers.get("Accept", "")
+        client.post("/dpskServices/query", json={"page": 1})
+        assert sent[0].headers["Accept"] == media_type("2")
         assert sent[0].headers["Content-Type"] == "application/json"
 
     def test_unknown_endpoint_keeps_default_headers(self):
@@ -210,6 +210,7 @@ MIGRATED_CALLS = {
     "aps.list": lambda c: c.aps.list("v1"),
     "aps.create": lambda c: c.aps.create("v1", serialNumber="SN1", name="AP"),
     "aps.delete": lambda c: c.aps.delete("v1", ["SN1"]),
+    "aps.update (move)": lambda c: c.aps.update("v2", "SN1", {"name": "AP"}),
     "ap_groups.list": lambda c: c.ap_groups.list("v1"),
     "venues.filter": lambda c: c.venues.filter(filters={}),
     "venues.delete": lambda c: c.venues.delete(["v1"]),
@@ -220,6 +221,8 @@ CANNED = {
     "/venues/aps/query": {"data": [{"serialNumber": "SN1", "venueId": "v1"}]},
     "/wifiNetworks/query": {"data": [{"id": "n1", "name": "Guest"}]},
     "/dpskServices/query": {"data": [{"id": "d1", "name": "Pool"}]},
+    "/venues/apGroups/query": {"data": [{"id": "g", "isDefault": True}]},
+    "/activities/r": {"status": "SUCCESS"},
 }
 
 

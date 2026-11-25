@@ -63,6 +63,19 @@ def test_aps_get_by_serial(mock_client):
     mock_client.get.assert_called_once_with("/venues/venue_1/aps/ABC123")
 
 
+def test_aps_get_by_serial_drops_login_password(mock_client):
+    """The plain-text AP login password in the configuration is not returned."""
+    mock_client.post.return_value = {
+        "data": [{"serialNumber": "ABC123", "venueId": "venue_1"}]
+    }
+    mock_client.get.return_value = {"name": "AP", "loginPassword": "secret"}
+
+    ap = APsResource(mock_client).get_by_serial("venue_1", "ABC123")
+
+    assert "loginPassword" not in ap
+    assert ap["name"] == "AP"
+
+
 def test_aps_get_by_serial_reports_the_venue_the_ap_is_in(mock_client):
     """An AP registered in another venue is found there, and venueId says so."""
     mock_client.post.return_value = {
@@ -195,15 +208,126 @@ def test_aps_create_missing_required_field(mock_client):
         resource.create("venue_1", macAddress="00:11:22:33:44:55")
 
 
-def test_aps_update(mock_client):
-    """Test updating an AP."""
-    mock_client.put.return_value = {"serialNumber": "ABC123", "name": "Updated AP"}
+def test_aps_update_in_place(mock_client):
+    """An AP already in the venue gets only the venue-scoped config PUT."""
+    mock_client.post.return_value = {
+        "data": [{"serialNumber": "ABC123", "venueId": "venue_1", "name": "Old"}]
+    }
+    mock_client.put.return_value = {"requestId": "req_1"}
 
-    resource = APsResource(mock_client)
-    ap = resource.update("venue_1", "ABC123", {"name": "Updated AP"})
+    result = APsResource(mock_client).update(
+        "venue_1",
+        "ABC123",
+        {"name": "New", "description": "d", "venueId": "x", "serialNumber": "y"},
+    )
 
-    assert ap["name"] == "Updated AP"
-    mock_client.put.assert_called_once()
+    assert result == {"requestId": "req_1"}
+    assert mock_client.post.call_args_list == [lookup_call(["ABC123"])]
+    mock_client.put.assert_called_once_with(
+        "/venues/venue_1/aps/ABC123", json={"name": "New", "description": "d"}
+    )
+
+
+def test_aps_update_keeps_current_name_when_data_has_none(mock_client):
+    mock_client.post.return_value = {
+        "data": [{"serialNumber": "ABC123", "venueId": "venue_1", "name": "Old"}]
+    }
+    mock_client.put.return_value = {"requestId": "req_1"}
+
+    APsResource(mock_client).update("venue_1", "ABC123", {"description": "d"})
+
+    mock_client.put.assert_called_once_with(
+        "/venues/venue_1/aps/ABC123", json={"description": "d", "name": "Old"}
+    )
+
+
+def test_aps_update_moves_ap_into_default_group_of_target_venue(mock_client):
+    """An AP in another venue is moved into the target's default group, then updated."""
+    mock_client.post.side_effect = [
+        {"data": [{"serialNumber": "ABC123", "venueId": "venue_old", "name": "AP"}]},
+        {
+            "data": [
+                {"id": "g_other", "isDefault": False, "venueId": "venue_new"},
+                {"id": "g_default", "isDefault": True, "venueId": "venue_new"},
+            ]
+        },
+    ]
+    mock_client.put.side_effect = [{"requestId": "req_move"}, {"requestId": "req_cfg"}]
+    mock_client.activities = MagicMock()
+
+    result = APsResource(mock_client).update("venue_new", "ABC123", {"name": "AP"})
+
+    assert result == {"requestId": "req_cfg"}
+    assert mock_client.post.call_args_list[1] == call(
+        "/venues/apGroups/query",
+        json={"filters": {"venueId": ["venue_new"]}, "page": 1, "pageSize": 100},
+    )
+    assert mock_client.put.call_args_list == [
+        call("/venues/venue_new/apGroups/g_default/aps/ABC123", json={}),
+        call("/venues/venue_new/aps/ABC123", json={"name": "AP"}),
+    ]
+    mock_client.activities.wait_for_completion.assert_called_once_with(
+        "req_move", timeout=60.0, poll_interval=2.0
+    )
+
+
+def test_aps_update_moves_ap_into_named_group(mock_client):
+    """An ``apGroupId`` in data that differs from the AP's group moves it there."""
+    mock_client.post.return_value = {
+        "data": [
+            {"serialNumber": "A", "venueId": "v1", "apGroupId": "g1", "name": "AP"}
+        ]
+    }
+    mock_client.put.side_effect = [{"requestId": "req_move"}, {"requestId": "req_cfg"}]
+    mock_client.activities = MagicMock()
+
+    APsResource(mock_client).update("v1", "A", {"name": "AP", "apGroupId": "g2"})
+
+    assert mock_client.put.call_args_list == [
+        call("/venues/v1/apGroups/g2/aps/A", json={}),
+        call("/venues/v1/aps/A", json={"name": "AP"}),
+    ]
+    assert mock_client.post.call_count == 1
+
+
+def test_aps_update_same_group_does_not_move(mock_client):
+    mock_client.post.return_value = {
+        "data": [
+            {"serialNumber": "A", "venueId": "v1", "apGroupId": "g1", "name": "AP"}
+        ]
+    }
+    mock_client.put.return_value = {"requestId": "req_cfg"}
+
+    APsResource(mock_client).update("v1", "A", {"name": "AP", "apGroupId": "g1"})
+
+    mock_client.put.assert_called_once_with("/venues/v1/aps/A", json={"name": "AP"})
+
+
+def test_aps_update_not_found(mock_client):
+    mock_client.post.return_value = {"data": []}
+
+    with pytest.raises(RuckusOneNotFoundError):
+        APsResource(mock_client).update("v1", "A", {"name": "AP"})
+    mock_client.put.assert_not_called()
+
+
+def test_aps_update_move_without_default_group(mock_client):
+    mock_client.post.side_effect = [
+        {"data": [{"serialNumber": "A", "venueId": "v_old"}]},
+        {"data": [{"id": "g", "isDefault": False, "venueId": "v_new"}]},
+    ]
+
+    with pytest.raises(RuckusOneNotFoundError, match="default AP group"):
+        APsResource(mock_client).update("v_new", "A", {"name": "AP"})
+    mock_client.put.assert_not_called()
+
+
+def test_aps_update_empty_response(mock_client):
+    mock_client.post.return_value = {"data": [{"serialNumber": "A", "venueId": "v1"}]}
+    mock_client.put.return_value = None
+
+    with pytest.raises(ValueError, match="Failed to update AP"):
+        APsResource(mock_client).update("v1", "A", {"name": "AP"})
 
 
 def test_aps_delete(mock_client):

@@ -155,7 +155,8 @@ The project is “client library first”: the canonical entry is `RuckusOneClie
       - `get_by_serial(venue_id, serial_number)` -> `POST /venues/aps/query` (any venue) to find the AP's venue, then `GET /venues/{venue}/aps/{serial}`; returns the merged row + config with the real `venueId` (`venue_id` is only a fallback)
       - `list(venue_id=None, **filters)` -> pages `POST /venues/aps/query`; kwargs become `filters` lists
       - `create(venue_id, **kwargs)` -> `POST /venues/{venue}/aps` with a single AP object; returns `{requestId, response:{id}}`
-      - `update(venue_id, serial_number, data)` -> currently attempts `PUT /venues/aps/{serialNumber}` with venueId + serialNumber in body; PATCH fallback is effectively unimplemented.
+      - `update(venue_id, serial_number, data)` -> finds the AP's venue by query; if it is elsewhere (or `data.apGroupId` differs) moves it with `PUT /venues/{venue}/apGroups/{group}/aps/{serial}` (target's default group unless `apGroupId` given) and waits for the activity, then `PUT /venues/{venue}/aps/{serial}` with name/description/tags/model/deviceGps. `PUT /venues/aps/{serial}` answers with `Ruckus-Deprecated` although the spec lists it as current.
+      - `get_by_serial` drops `loginPassword`: `GET /venues/{venue}/aps/{serial}` returns the AP admin password in plain text, and DEBUG logging prints response bodies.
       - `delete(venue_id, serial_number|list)` -> one `DELETE /venues/{venue}/aps/{serial}` per AP, in the venue `POST /venues/aps/query` reports (fallback `venue_id`); a list returns `{"responses": [...]}`
     - Neighbor scan workflow:
       - `collect_neighbors(venue_id, serial_number, neighbor_type="LLDP_NEIGHBOR")`:

@@ -23,10 +23,11 @@ class APsResource:
 
     _QUERY_PATH = "/venues/aps/query"
     _LOOKUP_FIELDS = ["serialNumber", "name", "venueId", "apGroupId", "model"]
-
-    def _get_path(self) -> str:
-        """Get the path of the AP update endpoint, ``/venues/aps``."""
-        return "/venues/aps"
+    _SECRET_FIELDS = frozenset({"loginPassword"})
+    _CONFIG_FIELDS = ("name", "description", "tags", "model", "deviceGps")
+    _AP_GROUP_QUERY_PATH = "/venues/apGroups/query"
+    _MOVE_TIMEOUT_SECONDS = 60.0
+    _MOVE_POLL_INTERVAL_SECONDS = 2.0
 
     def _venue_ap_path(self, venue_id: Union[int, str], serial_number: str) -> str:
         return f"/venues/{venue_id}/aps/{serial_number}"
@@ -61,7 +62,9 @@ class APsResource:
         merges both: the query row (``serialNumber``, ``name``, ``venueId``,
         ``apGroupId``, ``model``) overlaid with the configuration (``name``,
         ``description``, ``tags``, ``model``, ``deviceGps``). ``venueId`` is the
-        venue the AP is in, which can differ from ``venue_id``.
+        venue the AP is in, which can differ from ``venue_id``. The AP's
+        ``loginPassword``, which the configuration carries in plain text, is
+        left out.
 
         Args:
             venue_id: Venue ID used when the query row carries no ``venueId``
@@ -82,9 +85,14 @@ class APsResource:
         if not detail:
             raise RuckusOneNotFoundError(f"AP with serial {serial_number} not found")
 
+        config = {
+            key: value
+            for key, value in cast(Dict[str, Any], detail).items()
+            if key not in self._SECRET_FIELDS
+        }
         return {
             **row,
-            **cast(Dict[str, Any], detail),
+            **config,
             "serialNumber": serial_number,
             "venueId": ap_venue_id,
         }
@@ -150,34 +158,71 @@ class APsResource:
         serial_number: str,
         data: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Update an existing AP.
+        """Update an AP's configuration, moving it into ``venue_id`` first if needed.
 
-        Note: Update endpoint may vary. This attempts PUT /venues/aps/{serialNumber}.
-        The API requires venueId and serialNumber in the request body.
+        POST /venues/aps/query finds the AP's current venue. When that differs
+        from ``venue_id``, or ``data`` names a different ``apGroupId``, the AP is
+        moved with PUT /venues/{venueId}/apGroups/{apGroupId}/aps/{serialNumber}
+        into ``data["apGroupId"]`` or, without one, the default AP group of
+        ``venue_id``, and the move is awaited. The configuration (``name``,
+        ``description``, ``tags``, ``model``, ``deviceGps``; any other key in
+        ``data`` is dropped) is then written with
+        PUT /venues/{venueId}/aps/{serialNumber}. ``name`` is required by the
+        endpoint and taken from the AP when ``data`` has none.
 
         Args:
-            venue_id: Venue ID (for reference)
+            venue_id: Venue the AP belongs in
             serial_number: AP serial number
-            data: Data to update
+            data: Fields to update
 
         Returns:
-            Updated AP data (may include requestId for async operations)
-        """
-        # Ensure body includes venueId and serialNumber (API requires them)
-        payload = {**data, "venueId": str(venue_id), "serialNumber": serial_number}
-        path = f"{self._get_path()}/{serial_number}"
-        try:
-            response = self.client.put(path, json=payload)
-            if response:
-                return cast(Dict[str, Any], response)
-        except RuckusOneNotFoundError:
-            # Fall back to PATCH if PUT doesn't work
-            logger.debug(f"PUT not available, trying PATCH for AP {serial_number}")
-            # Note: httpx doesn't have PATCH directly, but we can use request method
-            # For now, just raise the error
-            pass
+            Response of the configuration PUT (``requestId``)
 
-        raise ValueError(f"Failed to update AP with serial {serial_number}")
+        Raises:
+            RuckusOneNotFoundError: If the AP, or a default AP group for a move,
+                is not found
+            ValueError: If the configuration PUT returns no response
+        """
+        current = self._find([serial_number]).get(serial_number)
+        if current is None:
+            raise RuckusOneNotFoundError(f"AP with serial {serial_number} not found")
+
+        target_venue = str(venue_id)
+        target_group = data.get("apGroupId")
+        in_venue = str(current.get("venueId") or target_venue) == target_venue
+        if not in_venue or (target_group and target_group != current.get("apGroupId")):
+            group_id = target_group or self._default_ap_group_id(target_venue)
+            moved = self.client.put(
+                f"/venues/{target_venue}/apGroups/{group_id}/aps/{serial_number}",
+                json={},
+            )
+            request_id = (moved or {}).get("requestId")
+            if request_id:
+                self.client.activities.wait_for_completion(
+                    request_id,
+                    timeout=self._MOVE_TIMEOUT_SECONDS,
+                    poll_interval=self._MOVE_POLL_INTERVAL_SECONDS,
+                )
+
+        config = {k: v for k, v in data.items() if k in self._CONFIG_FIELDS}
+        config.setdefault("name", current.get("name"))
+        response = self.client.put(
+            self._venue_ap_path(target_venue, serial_number), json=config
+        )
+        if not response:
+            raise ValueError(f"Failed to update AP with serial {serial_number}")
+        return cast(Dict[str, Any], response)
+
+    def _default_ap_group_id(self, venue_id: str) -> str:
+        rows = query_all(
+            self.client,
+            self._AP_GROUP_QUERY_PATH,
+            {"filters": {"venueId": [venue_id]}},
+        )
+        for row in rows:
+            if row.get("isDefault") and str(row.get("venueId", venue_id)) == venue_id:
+                return str(row["id"])
+        raise RuckusOneNotFoundError(f"No default AP group found in venue {venue_id}")
 
     def delete(
         self, venue_id: Union[int, str], serial_number: Union[str, List[str]]
