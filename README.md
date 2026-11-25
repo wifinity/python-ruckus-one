@@ -15,7 +15,7 @@ A Python client library for the Ruckus One API.
 - **Async Operations**: Support for asynchronous API operations with polling
 - **Multi-Region Support**: Support for US, EU, and Asia regions
 - **Logging**: Configurable logging throughout the client
-- **Python 3.8+**: Modern Python features and type hints
+- **Python 3.12+**: Modern Python features and type hints
 
 ## Installation
 

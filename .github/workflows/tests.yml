@@ -11,22 +11,20 @@ concurrency:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.8"
-          architecture: x64
-
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
       - name: Create virtual environment
-        run: uv venv
+        run: uv venv --python ${{ matrix.python }}
 
       - name: Install dependencies
         run: |
