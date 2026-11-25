@@ -314,6 +314,12 @@ The project is “client library first”: the canonical entry is `RuckusOneClie
 
 ## 8) Notable Quirks / Gotchas
 
+- API versioning and drift:
+  - Ruckus One returns the latest version of an endpoint unless the request names one; `ruckus_one/api_versions.py` pins every endpoint the SDK calls and the client sends the matching `Accept`/`Content-Type`.
+  - Ruckus publishes API changes in dated batches (around the 20th of each month) under "Change History" on docs.ruckus.cloud, announces planned changes under "Upcoming Changes", and serves each OpenAPI spec at `https://docs.ruckus.cloud/_spec/{api|deprecated_apis}/<slug>.json`.
+  - Deprecated operations are listed in a separate "Deprecated APIs" section; policy says removal happens in an annual March window, but the 2026-11-20 batch deleted operations outside it.
+  - The `/networks` CRUD, `/networkActivations` create/delete, `/venues/aps` list/create/delete, `GET /venues/{venueId}/apGroups`, `GET /venues` and `DELETE /venues` operations are deprecated; `POST /networks/query` and `GET /dpskServices` are absent from every published spec.
+
 - Typing vs runtime shape mismatch:
   - `RuckusOneClient.post/put/delete` JSON type hints are `Optional[Dict]`, but several resources pass JSON arrays/lists (e.g. AP create sends `json=[ap_data]`; AP delete sends `json=[serialNumbers]`; Venues/WiFi uses dicts).
   - Runtime works because `httpx` accepts JSON-serializable types, but strict type checking may complain.

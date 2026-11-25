@@ -5,10 +5,11 @@ import logging
 import re
 import time
 from json import JSONDecodeError
-from typing import Any, Dict, List, Optional, Type, Union, cast
+from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union, cast
 
 import httpx
 
+from ruckus_one.api_versions import Endpoint, find_endpoint
 from ruckus_one.auth import OAuth2TokenManager
 from ruckus_one.exceptions import (
     RuckusOneAPIError,
@@ -51,6 +52,7 @@ class RuckusOneClient:
         max_retries: int = 3,
         enable_retry: bool = True,
         log_level: Union[str, int, None] = None,
+        pin_api_versions: bool = True,
     ) -> None:
         """Initialize the Ruckus One client.
 
@@ -65,6 +67,9 @@ class RuckusOneClient:
             enable_retry: Whether to enable automatic retries
             log_level: Log level for the client (DEBUG, INFO, WARNING, ERROR, CRITICAL)
                        or None to use default/global setting
+            pin_api_versions: Send the API versions pinned in
+                       ``ruckus_one.api_versions.ENDPOINTS``. When False, requests
+                       carry no vendor media type and get the latest version.
         """
         self.region = region
         self.tenant_id = tenant_id
@@ -73,6 +78,8 @@ class RuckusOneClient:
         self.max_retries = max_retries
         self.enable_retry = enable_retry
         self.log_level = log_level
+        self.pin_api_versions = pin_api_versions
+        self._reported_deprecations: Set[Tuple[str, str]] = set()
 
         # Initialize OAuth2 token manager
         self.auth = OAuth2TokenManager(
@@ -439,6 +446,37 @@ class RuckusOneClient:
             # Fallback if anything goes wrong (don't break the request)
             logger.debug(f"Response body: <error reading response: {e}>")
 
+    def _report_deprecation(
+        self,
+        method: str,
+        path: str,
+        endpoint: Optional[Endpoint],
+        response: httpx.Response,
+    ) -> None:
+        """Log a warning the first time a deprecated endpoint is called.
+
+        Ruckus One marks deprecated endpoints and versions with the
+        ``Ruckus-Deprecated`` response header and names the newest version in
+        ``Ruckus-Current-Version``.
+        """
+        flag = response.headers.get("Ruckus-Deprecated")
+        if flag is None or flag.strip().lower() in ("", "false", "0"):
+            return
+        operation = (method.upper(), endpoint.path if endpoint else path)
+        if operation in self._reported_deprecations:
+            return
+        self._reported_deprecations.add(operation)
+        pinned = endpoint.response_version if endpoint else None
+        logger.warning(
+            "Ruckus One API deprecation: %s %s (pinned version %s, "
+            "current version %s, Ruckus-Deprecated: %s)",
+            operation[0],
+            operation[1],
+            pinned or "unpinned",
+            response.headers.get("Ruckus-Current-Version", "unknown"),
+            flag,
+        )
+
     def _request(
         self,
         method: str,
@@ -469,10 +507,13 @@ class RuckusOneClient:
         # Only use path as-is when it's a full URL (starting with http).
         if path.startswith("http"):
             url = path
+            path = httpx.URL(path).path
         else:
             if not path.startswith("/"):
                 path = f"/{path}"
             url = f"{self.base_url}{path}"
+
+        endpoint = find_endpoint(method, path)
 
         # Log request details
         logger.debug(f"{method} {url}")
@@ -484,6 +525,9 @@ class RuckusOneClient:
 
         # Get headers (includes auth and delegated tenant if set)
         headers = self._get_headers()
+        if self.pin_api_versions and endpoint is not None:
+            has_body = files is None and (json is not None or data is not None)
+            headers.update(endpoint.headers(has_body))
 
         # Log request headers (with sensitive data masked)
         if params:
@@ -509,6 +553,8 @@ class RuckusOneClient:
 
             # Log response body
             self._log_response_body(response)
+
+            self._report_deprecation(method, path, endpoint, response)
 
             return self._handle_response(response)
         except httpx.RequestError as e:
