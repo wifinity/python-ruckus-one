@@ -189,7 +189,7 @@ def test_wifi_networks_list_venue_networks(mock_client):
     assert len(activations) == 1
     mock_client.post.assert_called_once_with(
         "/networkActivations/query",
-        json={"filters": [{"venueId": "venue_1"}], "page": 1, "pageSize": 100},
+        json={"venueId": "venue_1", "page": 1, "pageSize": 100},
     )
 
 
@@ -206,7 +206,8 @@ def test_wifi_networks_list_venue_networks_with_network_id(mock_client):
     mock_client.post.assert_called_once_with(
         "/networkActivations/query",
         json={
-            "filters": [{"venueId": "venue_1", "networkId": "network_1"}],
+            "venueId": "venue_1",
+            "networkId": "network_1",
             "page": 1,
             "pageSize": 100,
         },
@@ -235,12 +236,45 @@ def test_wifi_networks_list_venue_networks_with_fields(mock_client):
     mock_client.post.assert_called_once_with(
         "/networkActivations/query",
         json={
-            "filters": [{"venueId": "venue_1", "networkId": "network_1"}],
+            "venueId": "venue_1",
+            "networkId": "network_1",
             "page": 1,
             "pageSize": 100,
             "fields": ["apGroups"],
         },
     )
+
+
+def test_wifi_networks_list_venue_networks_drops_other_venues_and_networks(mock_client):
+    """Rows for another venue or network are dropped; rows without the key are kept."""
+    mock_client.post.return_value = {
+        "data": [
+            {"id": "keep", "venueId": "venue_1", "networkId": "network_1"},
+            {"id": "other_venue", "venueId": "venue_2", "networkId": "network_1"},
+            {"id": "other_net", "venueId": "venue_1", "networkId": "network_2"},
+            {"id": "no_keys"},
+        ]
+    }
+
+    activations = WiFiNetworksResource(mock_client).list_venue_networks(
+        "venue_1", network_id="network_1"
+    )
+
+    assert [a["id"] for a in activations] == ["keep", "no_keys"]
+
+
+def test_wifi_networks_list_venue_networks_venue_only_keeps_all_networks(mock_client):
+    mock_client.post.return_value = {
+        "data": [
+            {"id": "a", "venueId": "venue_1", "networkId": "n1"},
+            {"id": "b", "venueId": "venue_1", "networkId": "n2"},
+            {"id": "c", "venueId": "venue_2", "networkId": "n1"},
+        ]
+    }
+
+    activations = WiFiNetworksResource(mock_client).list_venue_networks("venue_1")
+
+    assert [a["id"] for a in activations] == ["a", "b"]
 
 
 def test_wifi_networks_list_venue_networks_follows_pages(mock_client):

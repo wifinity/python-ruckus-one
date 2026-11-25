@@ -142,7 +142,7 @@ The project is “client library first”: the canonical entry is `RuckusOneClie
       - CRUD on `/wifiNetworks`; `all()`/`get(name=...)` page through `POST /wifiNetworks/query` (name lookup resolves the id, then `GET /wifiNetworks/{id}` for the full object)
       - `activate_at_venue(venue_id, network_id)` -> `PUT /venues/{venue}/wifiNetworks/{network}` with `{}` (idempotent)
       - `deactivate_at_venue(venue_id, network_id)` -> `DELETE /venues/{venue}/wifiNetworks/{network}`
-      - `list_venue_networks(venue_id, network_id=None)` -> `POST /networkActivations/query`
+      - `list_venue_networks(venue_id, network_id=None, fields=None)` -> pages `POST /networkActivations/query` with TOP-LEVEL `venueId`/`networkId` (live-verified 2026-11-25: any `filters` shape is ignored and returns the whole tenant) and drops rows for other venues/networks client-side
       - `get_venue_settings(venue_id, network_id)` -> `GET /venues/{venue}/wifiNetworks/{network}/settings`
       - `update_venue_settings(...)` -> `PUT .../settings`
   - Gotchas:

@@ -145,10 +145,10 @@ class WiFiNetworksResource(BaseResource):
     ) -> List[Dict[str, Any]]:
         """List networks activated at a venue.
 
-        Uses POST /networkActivations/query, filtered on the venue and optionally the
-        network, and follows every page. The endpoint reads its filter only from
-        ``filters`` (a list of match objects); top-level ``venueId``/``networkId`` keys
-        are ignored and return every activation in the tenant.
+        Uses POST /networkActivations/query with top-level ``venueId`` and
+        optional ``networkId`` keys and follows every page. The endpoint ignores
+        a ``filters`` key. Rows naming a different venue or network are dropped,
+        so an ignored filter cannot return another venue's activations.
 
         Args:
             venue_id: Venue ID
@@ -161,39 +161,24 @@ class WiFiNetworksResource(BaseResource):
         Returns:
             List of network activations for the venue
         """
-        path = "/networkActivations/query"
-        match: Dict[str, Any] = {"venueId": str(venue_id)}
+        match: Dict[str, str] = {"venueId": str(venue_id)}
         if network_id is not None:
             match["networkId"] = str(network_id)
-        page_size = self._ACTIVATION_QUERY_PAGE_SIZE
+        body: Dict[str, Any] = dict(match)
+        if fields is not None:
+            body["fields"] = list(fields)
 
-        activations: List[Dict[str, Any]] = []
-        page = 1
-        while True:
-            body: Dict[str, Any] = {
-                "filters": [match],
-                "page": page,
-                "pageSize": page_size,
-            }
-            if fields is not None:
-                body["fields"] = list(fields)
-            response = self.client.post(path, json=body)
-            if not response:
-                break
-            if isinstance(response, list):
-                activations.extend(cast(List[Dict[str, Any]], response))
-                break
-
-            items = cast(List[Dict[str, Any]], response.get("data") or [])
-            activations.extend(items)
-            total = response.get("totalCount")
-            if len(items) < page_size:
-                break
-            if isinstance(total, int) and len(activations) >= total:
-                break
-            page += 1
-
-        return activations
+        rows = query_all(
+            self.client,
+            "/networkActivations/query",
+            body,
+            page_size=self._ACTIVATION_QUERY_PAGE_SIZE,
+        )
+        return [
+            row
+            for row in rows
+            if all(str(row.get(key, value)) == value for key, value in match.items())
+        ]
 
     def activate_at_venue(
         self, venue_id: Union[int, str], network_id: Union[int, str]
