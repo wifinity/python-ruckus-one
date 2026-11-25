@@ -23,6 +23,19 @@ class APsResource:
 
     _QUERY_PATH = "/venues/aps/query"
     _LOOKUP_FIELDS = ["serialNumber", "name", "venueId", "apGroupId", "model"]
+    # The query view returns only the fields a request names.
+    _STATUS_FIELDS = [
+        "status",
+        "statusSeverity",
+        "macAddress",
+        "networkStatus",
+        "poePort",
+        "poePortStatus",
+        "firmwareVersion",
+        "lastSeenTime",
+        "uptime",
+        "clientCount",
+    ]
     _SECRET_FIELDS = frozenset({"loginPassword"})
     _CONFIG_FIELDS = ("name", "description", "tags", "model", "deviceGps")
     _AP_GROUP_QUERY_PATH = "/venues/apGroups/query"
@@ -32,16 +45,19 @@ class APsResource:
     def _venue_ap_path(self, venue_id: Union[int, str], serial_number: str) -> str:
         return f"/venues/{venue_id}/aps/{serial_number}"
 
-    def _find(self, serial_numbers: List[str]) -> Dict[str, Dict[str, Any]]:
+    def _find(
+        self, serial_numbers: List[str], fields: Optional[List[str]] = None
+    ) -> Dict[str, Dict[str, Any]]:
         """Query rows for the given serials, keyed by serial number.
 
         Uses POST /venues/aps/query, which searches every venue in the tenant.
+        Rows carry ``fields`` (default: the lookup fields).
         """
         rows = query_all(
             self.client,
             self._QUERY_PATH,
             {
-                "fields": self._LOOKUP_FIELDS,
+                "fields": fields or self._LOOKUP_FIELDS,
                 "filters": {"serialNumber": list(serial_numbers)},
             },
         )
@@ -60,7 +76,11 @@ class APsResource:
         Finds the AP's venue with POST /venues/aps/query, then reads its
         configuration with GET /venues/{venueId}/aps/{serialNumber}. The result
         merges both: the query row (``serialNumber``, ``name``, ``venueId``,
-        ``apGroupId``, ``model``) overlaid with the configuration (``name``,
+        ``apGroupId``, ``model`` and the operational fields ``status``,
+        ``statusSeverity``, ``macAddress``, ``networkStatus`` (with
+        ``ipAddress``), ``poePort``, ``poePortStatus``, ``firmwareVersion``,
+        ``lastSeenTime``, ``uptime``, ``clientCount``) overlaid with the
+        configuration (``name``,
         ``description``, ``tags``, ``model``, ``deviceGps``). ``venueId`` is the
         venue the AP is in, which can differ from ``venue_id``. The AP's
         ``loginPassword``, which the configuration carries in plain text, is
@@ -76,7 +96,9 @@ class APsResource:
         Raises:
             RuckusOneNotFoundError: If AP not found
         """
-        row = self._find([serial_number]).get(serial_number)
+        row = self._find(
+            [serial_number], self._LOOKUP_FIELDS + self._STATUS_FIELDS
+        ).get(serial_number)
         if row is None:
             raise RuckusOneNotFoundError(f"AP with serial {serial_number} not found")
 

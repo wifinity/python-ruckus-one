@@ -15,13 +15,25 @@ def test_aps_resource_initialization(mock_client):
 
 
 LOOKUP_FIELDS = ["serialNumber", "name", "venueId", "apGroupId", "model"]
+GET_FIELDS = LOOKUP_FIELDS + [
+    "status",
+    "statusSeverity",
+    "macAddress",
+    "networkStatus",
+    "poePort",
+    "poePortStatus",
+    "firmwareVersion",
+    "lastSeenTime",
+    "uptime",
+    "clientCount",
+]
 
 
-def lookup_call(serials):
+def lookup_call(serials, fields=LOOKUP_FIELDS):
     return call(
         "/venues/aps/query",
         json={
-            "fields": LOOKUP_FIELDS,
+            "fields": fields,
             "filters": {"serialNumber": serials},
             "page": 1,
             "pageSize": 100,
@@ -59,8 +71,34 @@ def test_aps_get_by_serial(mock_client):
         "venueId": "venue_1",
         "apGroupId": "grp-1",
     }
-    assert mock_client.post.call_args_list == [lookup_call(["ABC123"])]
+    assert mock_client.post.call_args_list == [lookup_call(["ABC123"], GET_FIELDS)]
     mock_client.get.assert_called_once_with("/venues/venue_1/aps/ABC123")
+
+
+def test_aps_get_by_serial_returns_operational_status(mock_client):
+    """get_by_serial() carries the status, MAC, IP and PoE fields from the query row."""
+    mock_client.post.return_value = {
+        "data": [
+            {
+                "serialNumber": "ABC123",
+                "venueId": "venue_1",
+                "status": "2_00_Operational",
+                "macAddress": "AA:BB:CC:DD:EE:FF",
+                "networkStatus": {"ipAddress": "192.0.2.10"},
+                "poePortStatus": "Up 1000Mbps full",
+            }
+        ],
+        "totalCount": 1,
+    }
+    mock_client.get.return_value = {"name": "Lobby AP"}
+
+    ap = APsResource(mock_client).get_by_serial("venue_1", "ABC123")
+
+    assert ap["status"] == "2_00_Operational"
+    assert ap["macAddress"] == "AA:BB:CC:DD:EE:FF"
+    assert ap["networkStatus"] == {"ipAddress": "192.0.2.10"}
+    assert ap["poePortStatus"] == "Up 1000Mbps full"
+    assert ap["name"] == "Lobby AP"
 
 
 def test_aps_get_by_serial_drops_login_password(mock_client):
